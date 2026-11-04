@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
   Text,
@@ -263,8 +263,10 @@ function Root() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <Root />
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <Root />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
