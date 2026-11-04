@@ -13,7 +13,7 @@
  * - window.confirm for demo-data reset → inline confirm row with buttons.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Pressable,
   SafeAreaView,
@@ -25,7 +25,7 @@ import {
 // RN: dropped web-only Moon/Sun/Smartphone/Vibrate imports (unused on web too)
 // and Download/Upload/RefreshCw/Palette/HelpCircle button icons (Svg cannot
 // nest inside GullyButton's Text children).
-import { Check } from "lucide-react-native";
+import { Check, ChevronLeft, CloudOff, HardDrive } from "lucide-react-native";
 import { db, AppSettings } from "../../storage/db";
 import {
   GullyButton,
@@ -35,6 +35,7 @@ import {
 import { useTheme, FONTS } from "../../design/theme";
 
 interface SettingsScreenProps {
+  onBack: () => void;
   onOpenHelp: () => void;
   onOpenGallery: () => void;
   onThemeChanged: () => void;
@@ -67,12 +68,30 @@ const CheckBox: React.FC<{ checked: boolean; onPress: () => void }> = ({
 };
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
+  onBack,
   onOpenHelp,
   onOpenGallery,
   onThemeChanged,
 }) => {
   const { colors, setMode } = useTheme();
   const [settings, setSettings] = useState(() => db.getSettings());
+  // Data & Sync snapshot (sync API — computed once per mount / data change)
+  const [dataCounts, setDataCounts] = useState(() => ({
+    matches: db.getMatches().length,
+    teams: db.getTeams().length,
+    players: db.getPlayers().length,
+    tournaments: db.getTournaments().length,
+  }));
+  useEffect(() => {
+    return db.subscribe(() =>
+      setDataCounts({
+        matches: db.getMatches().length,
+        teams: db.getTeams().length,
+        players: db.getPlayers().length,
+        tournaments: db.getTournaments().length,
+      })
+    );
+  }, []);
   const [backupStatus, setBackupStatus] = useState<string>("");
   // RN: web exported via Blob download / imported via file input — sheets here.
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
@@ -161,24 +180,42 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         style={{
           flexDirection: "row",
           alignItems: "center",
-          justifyContent: "space-between",
-          paddingHorizontal: 16,
-          paddingVertical: 12,
+          gap: 4,
+          paddingHorizontal: 8,
+          paddingVertical: 10,
           backgroundColor: colors.surface,
           borderBottomWidth: 1,
           borderBottomColor: colors.hairline,
         }}
       >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={onBack}
+          hitSlop={12}
+          style={({ pressed }) => ({
+            width: 40,
+            height: 40,
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 20,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <ChevronLeft size={24} strokeWidth={2} color={colors.ink} />
+        </Pressable>
         <Text
           style={{
             fontSize: 18,
             fontFamily: FONTS.serif,
             fontWeight: "700",
             color: colors.ink,
+            flex: 1,
           }}
         >
           Settings
         </Text>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView
@@ -195,6 +232,104 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           gap: 24,
         }}
       >
+        {/* Data & Sync Status */}
+        <View style={[section, { flexDirection: "column", gap: 12 }]}>
+          <Text style={sectionLabel}>Data &amp; Sync Status</Text>
+
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: colors.accentSubtle,
+              }}
+            >
+              <HardDrive size={18} strokeWidth={1.8} color={colors.success} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <View
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 4,
+                    backgroundColor: colors.success,
+                  }}
+                />
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontFamily: FONTS.sansSemiBold,
+                    fontWeight: "600",
+                    color: colors.ink,
+                  }}
+                >
+                  On-Device Storage — Active
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
+                {dataCounts.matches} matches · {dataCounts.teams} teams ·{" "}
+                {dataCounts.players} players · {dataCounts.tournaments} tournaments
+                stored locally (offline-first, AsyncStorage)
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+              paddingTop: 12,
+              borderTopWidth: 1,
+              borderTopColor: colors.hairline,
+            }}
+          >
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: colors.accentSubtle,
+              }}
+            >
+              <CloudOff size={18} strokeWidth={1.8} color={colors.ink2} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <View
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 4,
+                    backgroundColor: colors.ink2,
+                    opacity: 0.5,
+                  }}
+                />
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontFamily: FONTS.sansSemiBold,
+                    fontWeight: "600",
+                    color: colors.ink,
+                  }}
+                >
+                  Cloud Sync (Supabase) — Not Connected
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
+                Your cricket data never leaves this device. Use Export / Import
+                below to move it between phones.
+              </Text>
+            </View>
+          </View>
+        </View>
+
         {/* Appearance & Hardware */}
         <View style={[section, { flexDirection: "column", gap: 12 }]}>
           <Text style={sectionLabel}>Appearance &amp; Ergonomics</Text>

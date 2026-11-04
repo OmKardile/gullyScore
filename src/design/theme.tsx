@@ -97,9 +97,13 @@ export function useTheme() {
   return useContext(ThemeContext);
 }
 
-/** Shared font families: serif headings/numbers, sans body (web parity). */
+/** Shared font families: friendly & rounded — Nunito body, Baloo 2 display.
+ *  Static Google Font families loaded via useFonts() in App.tsx. */
 export const FONTS = {
-  serif: "serif",
-  serifBold: "serif",
-  sans: undefined as string | undefined,
+  serif: "Baloo2_600SemiBold",
+  serifBold: "Baloo2_700Bold",
+  sans: "Nunito_400Regular",
+  sansMedium: "Nunito_500Medium",
+  sansSemiBold: "Nunito_600SemiBold",
+  sansBold: "Nunito_700Bold",
 };

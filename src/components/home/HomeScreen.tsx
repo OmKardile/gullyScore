@@ -158,6 +158,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
         <Pressable
           onPress={onOpenSettings}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
           hitSlop={8}
           style={({ pressed }) => ({
             padding: 6,

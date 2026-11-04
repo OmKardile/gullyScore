@@ -2,14 +2,19 @@
  * GullyScoreRN App Root & Navigation Container
  *
  * RN port of the web app's App.tsx:
- * - 4 bottom tabs: Matches | Teams | Tournaments | Stats
- * - Custom bottom navigation with 2dp active line (no stock M3 pill)
- * - Full-screen live scorer outside tabs
- * - Light/dark theme synchronization
+ * - @react-navigation/native-stack for all overlay screens (proper back
+ *   handling: Android hardware back, iOS swipe-back, web browser back)
+ * - 4 bottom tabs: Matches | Teams | Tournaments | Stats (custom bar with
+ *   2dp active line — web parity)
+ * - Nunito (body) + Baloo 2 (headings) — friendly rounded Google Fonts
+ * - ErrorBoundary + font/boot gates
  */
 
 import React, { useEffect, useState } from "react";
-import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+} from "react-native-safe-area-context";
 import {
   View,
   Text,
@@ -18,8 +23,23 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Calendar, Users, Trophy, ChartColumn } from "lucide-react-native";
+import { NavigationContainer, useNavigation } from "@react-navigation/native";
+import {
+  createNativeStackNavigator,
+  NativeStackScreenProps,
+} from "@react-navigation/native-stack";
+import {
+  useFonts,
+  Nunito_400Regular,
+  Nunito_500Medium,
+  Nunito_600SemiBold,
+  Nunito_700Bold,
+  Baloo2_600SemiBold,
+  Baloo2_700Bold,
+} from "./src/design/fonts";
 import { db } from "./src/storage/db";
 import { ThemeProvider, useTheme, FONTS } from "./src/design/theme";
+import { ErrorBoundary } from "./src/components/common/ErrorBoundary";
 import { HomeScreen } from "./src/components/home/HomeScreen";
 import { ScoringScreen } from "./src/components/scoring/ScoringScreen";
 import { MatchDetailScreen } from "./src/components/match/MatchDetailScreen";
@@ -32,93 +52,118 @@ import { HelpScreen } from "./src/components/help/HelpScreen";
 import { ComponentGalleryScreen } from "./src/components/gallery/ComponentGalleryScreen";
 
 type MainTab = "matches" | "teams" | "tournaments" | "stats";
-type OverlayScreen =
-  | "none"
-  | "scoring"
-  | "match_setup"
-  | "match_detail"
-  | "settings"
-  | "help"
-  | "gallery";
+
+export type RootStackParamList = {
+  Tabs: undefined;
+  Scoring: { matchId: string };
+  MatchSetup:
+    | { tournamentId?: string; fixtureId?: string; teamAId?: string; teamBId?: string }
+    | undefined;
+  MatchDetail: { matchId: string };
+  Settings: undefined;
+  Help: undefined;
+  Gallery: undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+/* ------------------------------------------------------------------ */
+/* Route wrappers: translate navigation (params + goBack) into the     */
+/* existing screen props, so screens keep their original APIs.         */
+/* ------------------------------------------------------------------ */
+
+type Nav = NativeStackScreenProps<RootStackParamList>["navigation"];
+
+function ScoringRoute({
+  navigation,
+  route,
+}: NativeStackScreenProps<RootStackParamList, "Scoring">) {
+  return (
+    <ScoringScreen
+      matchId={route.params.matchId}
+      onExit={() => navigation.goBack()}
+      onViewScorecard={(mId) =>
+        navigation.navigate("MatchDetail", { matchId: mId })
+      }
+    />
+  );
+}
+
+function MatchSetupRoute({
+  navigation,
+  route,
+}: NativeStackScreenProps<RootStackParamList, "MatchSetup">) {
+  const p = route.params;
+  return (
+    <MatchSetupScreen
+      initialTournamentId={p?.tournamentId}
+      initialFixtureId={p?.fixtureId}
+      initialTeamAId={p?.teamAId}
+      initialTeamBId={p?.teamBId}
+      onBack={() => navigation.goBack()}
+      onMatchCreated={(mId) => {
+        // replace setup with the live scorer so Back exits to where you came from
+        navigation.replace("Scoring", { matchId: mId });
+      }}
+    />
+  );
+}
+
+function MatchDetailRoute({
+  navigation,
+  route,
+}: NativeStackScreenProps<RootStackParamList, "MatchDetail">) {
+  return (
+    <MatchDetailScreen
+      matchId={route.params.matchId}
+      onBack={() => navigation.goBack()}
+      onResumeScoring={(mId) => navigation.navigate("Scoring", { matchId: mId })}
+    />
+  );
+}
+
+function SettingsRoute({
+  navigation,
+}: NativeStackScreenProps<RootStackParamList, "Settings">) {
+  return (
+    <SettingsScreen
+      onBack={() => navigation.goBack()}
+      onOpenHelp={() => navigation.navigate("Help")}
+      onOpenGallery={() => navigation.navigate("Gallery")}
+      onThemeChanged={() => {}}
+    />
+  );
+}
+
+function HelpRoute({
+  navigation,
+}: NativeStackScreenProps<RootStackParamList, "Help">) {
+  return <HelpScreen onBack={() => navigation.goBack()} />;
+}
+
+function GalleryRoute({
+  navigation,
+}: NativeStackScreenProps<RootStackParamList, "Gallery">) {
+  return <ComponentGalleryScreen onBack={() => navigation.goBack()} />;
+}
+
+/* ------------------------------------------------------------------ */
+/* Main tabs with the strict custom bottom navigation (web parity)      */
+/* ------------------------------------------------------------------ */
 
 function MainTabs() {
   const { colors } = useTheme();
+  const navigation = useNavigation<Nav>();
   const [activeTab, setActiveTab] = useState<MainTab>("matches");
-  const [overlayScreen, setOverlayScreen] = useState<OverlayScreen>("none");
-  const [activeMatchId, setActiveMatchId] = useState<string>("");
-  const [setupParams, setSetupParams] = useState<any>(null);
 
-  const handleOpenMatchSetup = (params?: any) => {
-    setSetupParams(params || null);
-    setOverlayScreen("match_setup");
+  const handleOpenMatchSetup = (params?: {
+    tournamentId?: string;
+    fixtureId?: string;
+    teamAId?: string;
+    teamBId?: string;
+  }) => {
+    navigation.navigate("MatchSetup", params);
   };
-
-  // Full-Screen Overlays Outside Tabs
-  if (overlayScreen === "scoring" && activeMatchId) {
-    return (
-      <ScoringScreen
-        matchId={activeMatchId}
-        onExit={() => {
-          setOverlayScreen("none");
-          setActiveMatchId("");
-        }}
-        onViewScorecard={(mId) => {
-          setActiveMatchId(mId);
-          setOverlayScreen("match_detail");
-        }}
-      />
-    );
-  }
-
-  if (overlayScreen === "match_setup") {
-    return (
-      <MatchSetupScreen
-        initialTournamentId={setupParams?.tournamentId}
-        initialFixtureId={setupParams?.fixtureId}
-        initialTeamAId={setupParams?.teamAId}
-        initialTeamBId={setupParams?.teamBId}
-        onBack={() => setOverlayScreen("none")}
-        onMatchCreated={(mId) => {
-          setActiveMatchId(mId);
-          setOverlayScreen("scoring");
-        }}
-      />
-    );
-  }
-
-  if (overlayScreen === "match_detail" && activeMatchId) {
-    return (
-      <MatchDetailScreen
-        matchId={activeMatchId}
-        onBack={() => {
-          setOverlayScreen("none");
-          setActiveMatchId("");
-        }}
-        onResumeScoring={(mId) => {
-          setActiveMatchId(mId);
-          setOverlayScreen("scoring");
-        }}
-      />
-    );
-  }
-
-  if (overlayScreen === "settings") {
-    return (
-      <SettingsScreen
-        onOpenHelp={() => setOverlayScreen("help")}
-        onOpenGallery={() => setOverlayScreen("gallery")}
-        onThemeChanged={() => {}}
-      />
-    );
-  }
-
-  if (overlayScreen === "help") {
-    return <HelpScreen onBack={() => setOverlayScreen("settings")} />;
-  }
-
-  if (overlayScreen === "gallery") {
-    return <ComponentGalleryScreen onBack={() => setOverlayScreen("settings")} />;
-  }
 
   // Main Tab Destinations
   return (
@@ -128,15 +173,9 @@ function MainTabs() {
         {activeTab === "matches" && (
           <HomeScreen
             onStartNewMatch={() => handleOpenMatchSetup()}
-            onResumeMatch={(mId) => {
-              setActiveMatchId(mId);
-              setOverlayScreen("scoring");
-            }}
-            onOpenMatchDetail={(mId) => {
-              setActiveMatchId(mId);
-              setOverlayScreen("match_detail");
-            }}
-            onOpenSettings={() => setOverlayScreen("settings")}
+            onResumeMatch={(mId) => navigation.navigate("Scoring", { matchId: mId })}
+            onOpenMatchDetail={(mId) => navigation.navigate("MatchDetail", { matchId: mId })}
+            onOpenSettings={() => navigation.navigate("Settings")}
           />
         )}
 
@@ -145,10 +184,7 @@ function MainTabs() {
         {activeTab === "tournaments" && (
           <TournamentsScreen
             onOpenMatchSetup={(params) => handleOpenMatchSetup(params)}
-            onOpenMatchDetail={(mId) => {
-              setActiveMatchId(mId);
-              setOverlayScreen("match_detail");
-            }}
+            onOpenMatchDetail={(mId) => navigation.navigate("MatchDetail", { matchId: mId })}
           />
         )}
 
@@ -180,11 +216,14 @@ function MainTabs() {
             { id: "stats", label: "Stats", icon: ChartColumn },
           ].map((dest) => {
             const Icon = dest.icon;
-            const isActive = activeTab === dest.id as MainTab;
+            const isActive = activeTab === (dest.id as MainTab);
 
             return (
               <Pressable
                 key={dest.id}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isActive }}
+                accessibilityLabel={dest.label}
                 onPress={() => setActiveTab(dest.id as MainTab)}
                 style={({ pressed }) => [
                   {
@@ -235,15 +274,27 @@ function MainTabs() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Boot gate: fonts + local DB before first paint                      */
+/* ------------------------------------------------------------------ */
+
 function Root() {
   const { colors } = useTheme();
   const [booted, setBooted] = useState(false);
+  const [fontsLoaded] = useFonts({
+    Nunito_400Regular,
+    Nunito_500Medium,
+    Nunito_600SemiBold,
+    Nunito_700Bold,
+    Baloo2_600SemiBold,
+    Baloo2_700Bold,
+  });
 
   useEffect(() => {
     db.init().then(() => setBooted(true));
   }, []);
 
-  if (!booted) {
+  if (!booted || !fontsLoaded) {
     return (
       <View
         style={{
@@ -258,14 +309,30 @@ function Root() {
     );
   }
 
-  return <MainTabs />;
+  return (
+    <Stack.Navigator
+      screenOptions={{ headerShown: false, animation: "slide_from_right" }}
+    >
+      <Stack.Screen name="Tabs" component={MainTabs} />
+      <Stack.Screen name="Scoring" component={ScoringRoute} />
+      <Stack.Screen name="MatchSetup" component={MatchSetupRoute} />
+      <Stack.Screen name="MatchDetail" component={MatchDetailRoute} />
+      <Stack.Screen name="Settings" component={SettingsRoute} />
+      <Stack.Screen name="Help" component={HelpRoute} />
+      <Stack.Screen name="Gallery" component={GalleryRoute} />
+    </Stack.Navigator>
+  );
 }
 
 export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <Root />
+        <ErrorBoundary>
+          <NavigationContainer>
+            <Root />
+          </NavigationContainer>
+        </ErrorBoundary>
       </ThemeProvider>
     </SafeAreaProvider>
   );
