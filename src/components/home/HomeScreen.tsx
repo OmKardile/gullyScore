@@ -1,0 +1,809 @@
+/**
+ * GullyScore Home / Matches Screen
+ *
+ * Resume match banner, recent matches, upcoming fixtures,
+ * and an anchored in-layout "New match" bar (no FAB).
+ *
+ * RN port notes:
+ * - Web sticky header → fixed header above the ScrollView (SafeAreaView top).
+ * - Web `fixed bottom-32` toast + `fixed bottom-16` action bar → anchored at
+ *   the bottom of this screen's flex layout (above App's bottom nav); the
+ *   toast overlays via absolute positioning.
+ * - The action bar's `bg-gradient-to-t` fade is dropped (no gradient dep) —
+ *   solid bg with padding instead.
+ * - GullyButton children are text-only, so the web Play icon inside
+ *   "Resume Live Scoring" is dropped.
+ * - `animate-pulse` dot → trivial Animated opacity loop.
+ */
+
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Animated,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
+import { Match, Fixture } from "../../types/cricket";
+import { db } from "../../storage/db";
+import { GullyButton } from "../common/Components";
+import {
+  Plus,
+  Settings as SettingsIcon,
+  TrendingUp,
+  Inbox,
+  CheckCircle2,
+} from "lucide-react-native";
+import { replayInnings } from "../../engine/scoringEngine";
+import { calculateLiveWinProbability } from "../../engine/predictionEngine";
+import { SwipeableMatchItem } from "./SwipeableMatchItem";
+import { useTheme, FONTS } from "../../design/theme";
+
+interface HomeScreenProps {
+  onStartNewMatch: () => void;
+  onResumeMatch: (matchId: string) => void;
+  onOpenMatchDetail: (matchId: string) => void;
+  onOpenSettings: () => void;
+}
+
+export const HomeScreen: React.FC<HomeScreenProps> = ({
+  onStartNewMatch,
+  onResumeMatch,
+  onOpenMatchDetail,
+  onOpenSettings,
+}) => {
+  const { colors } = useTheme();
+  const [matches, setMatches] = useState<Match[]>(() => db.getMatches());
+  const [activeMatch, setActiveMatch] = useState<Match | null>(() => db.getActiveMatch());
+  const [fixtures, setFixtures] = useState<Fixture[]>(() => db.getFixtures());
+  const [matchFilter, setMatchFilter] = useState<"active" | "archived" | "all">("active");
+  const [toastMessage, setToastMessage] = useState<{ text: string; matchId?: string } | null>(null);
+
+  // RN: web `animate-pulse` on the live dot → trivial Animated loop.
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!activeMatch) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.3, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [activeMatch, pulse]);
+
+  useEffect(() => {
+    const unsub = db.subscribe(() => {
+      setMatches(db.getMatches());
+      setActiveMatch(db.getActiveMatch());
+      setFixtures(db.getFixtures());
+    });
+    return unsub;
+  }, []);
+
+  const handleToggleArchive = (matchId: string) => {
+    const isNowArchived = db.toggleArchiveMatch(matchId);
+    setToastMessage({
+      text: isNowArchived ? "Match moved to archive" : "Match restored from archive",
+      matchId,
+    });
+    setTimeout(() => {
+      setToastMessage((prev) => (prev?.matchId === matchId ? null : prev));
+    }, 4000);
+  };
+
+  const handleUndoArchive = () => {
+    if (toastMessage?.matchId) {
+      db.toggleArchiveMatch(toastMessage.matchId);
+      setToastMessage(null);
+    }
+  };
+
+  const displayedMatches = matches.filter((m) => {
+    if (matchFilter === "active") return !m.isArchived;
+    if (matchFilter === "archived") return !!m.isArchived;
+    return true;
+  });
+
+  const archivedCount = matches.filter((m) => !!m.isArchived).length;
+  const upcomingFixtures = fixtures.filter((f) => f.status === "pending").slice(0, 3);
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+      {/* Top App Bar */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          backgroundColor: colors.surface,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.hairline,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Text
+            style={{
+              fontFamily: FONTS.serif,
+              fontWeight: "700",
+              fontSize: 20,
+              color: colors.ink,
+              letterSpacing: -0.5,
+            }}
+          >
+            GullyScore
+          </Text>
+          <Text
+            style={{
+              fontSize: 10,
+              color: colors.ink2,
+              fontFamily: "monospace",
+              textTransform: "uppercase",
+              letterSpacing: 1,
+              paddingHorizontal: 6,
+              paddingVertical: 2,
+              borderWidth: 1,
+              borderColor: colors.hairlineStrong,
+              borderRadius: 2,
+              overflow: "hidden",
+            }}
+          >
+            Offline
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={onOpenSettings}
+          hitSlop={8}
+          style={({ pressed }) => ({
+            padding: 6,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <SettingsIcon size={20} strokeWidth={1.5} color={colors.ink2} />
+        </Pressable>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 32 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 560,
+            alignSelf: "center",
+            paddingHorizontal: 16,
+            paddingTop: 16,
+            flexDirection: "column",
+            gap: 20,
+          }}
+        >
+          {/* RESUME MATCH HERO BANNER (If a match is live) */}
+          {activeMatch && (
+            <View
+              style={{
+                padding: 16,
+                backgroundColor: colors.surface,
+                borderWidth: 2,
+                borderColor: colors.accent,
+                borderRadius: 12,
+                flexDirection: "column",
+                gap: 8,
+                shadowColor: "#000",
+                shadowOpacity: 0.05,
+                shadowRadius: 2,
+                shadowOffset: { width: 0, height: 1 },
+                elevation: 2,
+              }}
+            >
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Animated.View
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: colors.accent,
+                      opacity: pulse,
+                    }}
+                  />
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                      color: colors.accent,
+                      fontWeight: "700",
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Match in Progress
+                  </Text>
+                </View>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: colors.ink2,
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  {activeMatch.venue || "Local Ground"}
+                </Text>
+              </View>
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "flex-end",
+                  marginVertical: 4,
+                }}
+              >
+                <View>
+                  <Text
+                    style={{
+                      fontSize: 16,
+                      fontFamily: FONTS.serif,
+                      fontWeight: "700",
+                      color: colors.ink,
+                    }}
+                  >
+                    {db.getTeam(activeMatch.teamAId)?.name} vs{" "}
+                    {db.getTeam(activeMatch.teamBId)?.name}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: colors.ink2,
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Innings {activeMatch.currentInningsIndex + 1} ·{" "}
+                    {activeMatch.rules.overs} Overs
+                  </Text>
+                </View>
+
+                {(() => {
+                  const curInn = activeMatch.innings[activeMatch.currentInningsIndex];
+                  const sc = curInn
+                    ? replayInnings(curInn.ballEvents, activeMatch.rules, [], [], db.getPlayersMap())
+                    : null;
+                  return (
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text
+                        style={{
+                          fontSize: 24,
+                          fontFamily: FONTS.serif,
+                          fontWeight: "700",
+                          color: colors.ink,
+                          fontVariant: ["tabular-nums"],
+                        }}
+                      >
+                        {sc ? `${sc.totalRuns}/${sc.totalWickets}` : "0/0"}
+                      </Text>
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          color: colors.ink2,
+                          fontFamily: FONTS.sans,
+                        }}
+                      >
+                        ({sc?.oversFormatted || "0.0"} ov)
+                      </Text>
+                    </View>
+                  );
+                })()}
+              </View>
+
+              {/* Live Win Probability Snippet */}
+              {(() => {
+                const curInn = activeMatch.innings[activeMatch.currentInningsIndex];
+                const sc = curInn
+                  ? replayInnings(curInn.ballEvents, activeMatch.rules, [], [], db.getPlayersMap())
+                  : null;
+                if (!sc) return null;
+                const prob = calculateLiveWinProbability(activeMatch, sc);
+                const tA = db.getTeam(activeMatch.teamAId);
+                const tB = db.getTeam(activeMatch.teamBId);
+                return (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      backgroundColor: colors.surfaceCard,
+                      borderWidth: 1,
+                      borderColor: colors.hairline,
+                      borderRadius: 6,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                      <TrendingUp size={14} color={colors.accent} />
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          color: colors.ink2,
+                          fontFamily: FONTS.sans,
+                        }}
+                      >
+                        Win Predictor:
+                      </Text>
+                    </View>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "600",
+                        color: colors.ink,
+                        fontFamily: FONTS.sans,
+                        fontVariant: ["tabular-nums"],
+                      }}
+                    >
+                      {tA?.shortName} {prob.teamAWinProb}% · {tB?.shortName}{" "}
+                      {prob.teamBWinProb}%
+                    </Text>
+                  </View>
+                );
+              })()}
+
+              {/* RN: web Play icon inside the button dropped (GullyButton
+                  children are text-only). */}
+              <GullyButton
+                variant="accent"
+                fullWidth
+                onPress={() => onResumeMatch(activeMatch.id)}
+                style={{ marginTop: 4 }}
+              >
+                Resume Live Scoring
+              </GullyButton>
+            </View>
+          )}
+
+          {/* MATCHES LIST WITH SWIPE-TO-ACTION */}
+          <View style={{ flexDirection: "column", gap: 12 }}>
+            <View style={{ flexDirection: "column", gap: 6 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                    color: colors.ink2,
+                    fontWeight: "600",
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  Match Records
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.ink2,
+                    fontFamily: FONTS.sans,
+                    fontVariant: ["tabular-nums"],
+                  }}
+                >
+                  {displayedMatches.length} shown
+                </Text>
+              </View>
+
+              {/* Match Filter Tabs */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: 4,
+                  backgroundColor: colors.surface,
+                  borderWidth: 1,
+                  borderColor: colors.hairline,
+                  borderRadius: 8,
+                }}
+              >
+                <Pressable
+                  onPress={() => setMatchFilter("active")}
+                  style={({ pressed }) => [
+                    {
+                      flex: 1,
+                      paddingVertical: 4,
+                      paddingHorizontal: 8,
+                      borderRadius: 6,
+                      opacity: pressed ? 0.9 : 1,
+                    },
+                    matchFilter === "active"
+                      ? {
+                          backgroundColor: colors.ink,
+                          elevation: 1,
+                        }
+                      : {},
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: matchFilter === "active" ? "700" : "500",
+                      color: matchFilter === "active" ? colors.bg : colors.ink2,
+                      textAlign: "center",
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Active ({matches.filter((m) => !m.isArchived).length})
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setMatchFilter("archived")}
+                  style={({ pressed }) => [
+                    {
+                      flex: 1,
+                      paddingVertical: 4,
+                      paddingHorizontal: 8,
+                      borderRadius: 6,
+                      opacity: pressed ? 0.9 : 1,
+                    },
+                    matchFilter === "archived"
+                      ? {
+                          backgroundColor: colors.ink,
+                          elevation: 1,
+                        }
+                      : {},
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: matchFilter === "archived" ? "700" : "500",
+                      color: matchFilter === "archived" ? colors.bg : colors.ink2,
+                      textAlign: "center",
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Archived ({archivedCount})
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setMatchFilter("all")}
+                  style={({ pressed }) => [
+                    {
+                      paddingVertical: 4,
+                      paddingHorizontal: 10,
+                      borderRadius: 6,
+                      opacity: pressed ? 0.9 : 1,
+                    },
+                    matchFilter === "all"
+                      ? {
+                          backgroundColor: colors.ink,
+                          elevation: 1,
+                        }
+                      : {},
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: matchFilter === "all" ? "700" : "500",
+                      color: matchFilter === "all" ? colors.bg : colors.ink2,
+                      textAlign: "center",
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    All
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Swipe-to-action gesture hint */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                backgroundColor: colors.surfaceCard,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+                borderRadius: 6,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: colors.accent,
+                    fontWeight: "700",
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  →
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: colors.ink2,
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  Swipe right to resume
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: colors.ink2,
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  Swipe left to archive
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: "#D97706",
+                    fontWeight: "700",
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  ←
+                </Text>
+              </View>
+            </View>
+
+            {displayedMatches.length === 0 ? (
+              <View
+                style={{
+                  padding: 32,
+                  alignItems: "center",
+                  backgroundColor: colors.surface,
+                  borderWidth: 1,
+                  borderColor: colors.hairline,
+                  borderRadius: 10,
+                }}
+              >
+                <Inbox size={32} color={colors.ink2} opacity={0.4} />
+                <Text
+                  style={{
+                    fontSize: 14,
+                    fontFamily: FONTS.serif,
+                    fontWeight: "700",
+                    color: colors.ink,
+                    textAlign: "center",
+                    marginTop: 8,
+                  }}
+                >
+                  {matchFilter === "archived" ? "No Archived Matches" : "No Matches Recorded Yet"}
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.ink2,
+                    fontFamily: FONTS.sans,
+                    textAlign: "center",
+                    marginTop: 4,
+                  }}
+                >
+                  {matchFilter === "archived"
+                    ? "Swipe left on any active match to archive it."
+                    : "Tap 'New Match' below to score your first gully cricket match."}
+                </Text>
+              </View>
+            ) : (
+              <View style={{ flexDirection: "column", gap: 10 }}>
+                {displayedMatches.map((m) => (
+                  <SwipeableMatchItem
+                    key={m.id}
+                    match={m}
+                    onOpenMatchDetail={onOpenMatchDetail}
+                    onResumeMatch={onResumeMatch}
+                    onToggleArchive={handleToggleArchive}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* UPCOMING FIXTURES */}
+          {upcomingFixtures.length > 0 && (
+            <View style={{ flexDirection: "column", gap: 8 }}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  textTransform: "uppercase",
+                  letterSpacing: 1,
+                  color: colors.ink2,
+                  fontWeight: "600",
+                  fontFamily: FONTS.sans,
+                }}
+              >
+                Upcoming League Fixtures
+              </Text>
+              <View style={{ flexDirection: "column", gap: 8 }}>
+                {upcomingFixtures.map((f) => {
+                  const tA = db.getTeam(f.teamAId);
+                  const tB = db.getTeam(f.teamBId);
+                  return (
+                    <View
+                      key={f.id}
+                      style={{
+                        padding: 12,
+                        backgroundColor: colors.surface,
+                        borderWidth: 1,
+                        borderColor: colors.hairline,
+                        borderRadius: 8,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <View>
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            fontWeight: "500",
+                            color: colors.ink,
+                            fontFamily: FONTS.sans,
+                          }}
+                        >
+                          {tA?.name} vs {tB?.name}
+                        </Text>
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            color: colors.ink2,
+                            fontFamily: FONTS.sans,
+                            marginTop: 2,
+                          }}
+                        >
+                          {f.roundName} · {f.scheduledDate}
+                        </Text>
+                      </View>
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          color: colors.ink2,
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        Pending
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Action Feedback Toast — web `fixed bottom-32` → absolute overlay
+          anchored above the in-layout action bar. */}
+      {toastMessage && (
+        <View
+          style={{
+            position: "absolute",
+            bottom: 88,
+            left: 16,
+            right: 16,
+          }}
+          pointerEvents="box-none"
+        >
+          <View
+            style={{
+              maxWidth: 384,
+              alignSelf: "center",
+              padding: 12,
+              backgroundColor: colors.ink,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: colors.hairlineStrong,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              shadowColor: "#000",
+              shadowOpacity: 0.15,
+              shadowRadius: 8,
+              shadowOffset: { width: 0, height: 4 },
+              elevation: 4,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <CheckCircle2 size={16} color="#34D399" />
+              <Text
+                style={{
+                  fontSize: 12,
+                  color: colors.bg,
+                  fontFamily: FONTS.sans,
+                  flexShrink: 1,
+                }}
+              >
+                {toastMessage.text}
+              </Text>
+            </View>
+            {toastMessage.matchId && (
+              <Pressable
+                onPress={handleUndoArchive}
+                style={({ pressed }) => ({
+                  marginLeft: 12,
+                  paddingHorizontal: 8,
+                  paddingVertical: 2,
+                  backgroundColor: colors.surfaceCard,
+                  borderRadius: 4,
+                  opacity: pressed ? 0.8 : 1,
+                })}
+              >
+                <Text
+                  style={{
+                    color: colors.ink,
+                    fontWeight: "700",
+                    fontSize: 11,
+                    fontFamily: FONTS.sans,
+                  }}
+                >
+                  Undo
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* ANCHORED IN-LAYOUT PRIMARY ACTION BAR (STRICT NO-FAB REQUIREMENT) */}
+      {/* RN: web gradient fade dropped — solid bg pad instead. */}
+      <View style={{ padding: 12, backgroundColor: colors.bg }}>
+        <View style={{ width: "100%", maxWidth: 560, alignSelf: "center" }}>
+          <Pressable
+            onPress={onStartNewMatch}
+            style={({ pressed }) => ({
+              height: 56,
+              backgroundColor: colors.ink,
+              borderRadius: 10,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              opacity: pressed ? 0.95 : 1,
+              transform: [{ scale: pressed ? 0.98 : 1 }],
+              shadowColor: "#000",
+              shadowOpacity: 0.1,
+              shadowRadius: 6,
+              shadowOffset: { width: 0, height: 3 },
+              elevation: 4,
+            })}
+          >
+            <Plus size={20} strokeWidth={2} color={colors.bg} />
+            <Text
+              style={{
+                fontSize: 16,
+                fontFamily: FONTS.serif,
+                fontWeight: "600",
+                color: colors.bg,
+              }}
+            >
+              New Match
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+};
