@@ -15,7 +15,7 @@
  * - Web CSS grids -> fixed rows of flex:1 children via chunked().
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Modal,
   Pressable,
@@ -292,6 +292,29 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   const nonStrikerStat = scorecard.batters.find((b) => b.playerId === nonStrikerId);
   const bowlerStat = scorecard.bowlers.find((b) => b.playerId === bowlerId);
 
+  // Eligible bowlers for the next over (computed before recordBall so the
+  // recorder can consume the user's pick / auto-pick a legal bowler).
+  // `ballEvents.length > 0` guard: at the start of an innings there is no
+  // "previous over", so squad member #1 must not be flagged as consecutive.
+  const eligibleBowlers = bowlingSquadIds.map((pId) => {
+    const stat = scorecard.bowlers.find((b) => b.playerId === pId);
+    const oversBowled = stat ? stat.legalBalls / 6 : 0;
+    const isConsecutive =
+      match.rules.noConsecutiveOvers && ballEvents.length > 0 && bowlerId === pId;
+    const reachedMax = oversBowled >= match.rules.maxOversPerBowler;
+    let ineligibleReason = "";
+    if (isConsecutive) ineligibleReason = "Bowled previous over";
+    if (reachedMax) ineligibleReason = `Reached max quota (${match.rules.maxOversPerBowler} ov)`;
+
+    return {
+      playerId: pId,
+      player: playersMap[pId],
+      oversBowled,
+      isEligible: !isConsecutive && !reachedMax,
+      ineligibleReason,
+    };
+  });
+
   // Current over balls for ribbon
   const currentOverLegalBallsCount = scorecard.legalBallsCount % 6;
   const lastOverSummary = scorecard.overSummaries[scorecard.overSummaries.length - 1];
@@ -433,6 +456,29 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     ballsInCurrentOver.length === 0 &&
     !scorecard.isCompleted;
 
+  // Auto-open the next-bowler sheet ONCE per completed-over boundary (also
+  // on mount when a restored / synced match already sits at X.0 overs).
+  // CRITICAL: `isOpen` of the sheet is driven purely by showNextBowlerSheet.
+  // The previous `isOpen={showNextBowlerSheet || isOverComplete}` deadlocked
+  // the screen: isOverComplete only clears after the NEXT ball is recorded,
+  // but the blocking modal itself prevented recording that ball — so tapping
+  // a bowler (or Close / backdrop) never dismissed the sheet ("stuck screen").
+  const lastOverBoundaryRef = useRef(-1);
+  useEffect(() => {
+    if (!isOverComplete) {
+      // Left the boundary (next ball recorded / undo) — re-arm the prompt.
+      if (lastOverBoundaryRef.current !== -1) lastOverBoundaryRef.current = -1;
+      return;
+    }
+    if (
+      !showNextBowlerSheet &&
+      lastOverBoundaryRef.current !== scorecard.legalBallsCount
+    ) {
+      lastOverBoundaryRef.current = scorecard.legalBallsCount;
+      setShowNextBowlerSheet(true);
+    }
+  }, [isOverComplete, scorecard.legalBallsCount, showNextBowlerSheet]);
+
   // Handle recorded ball event
   const recordBall = useCallback(
     (
@@ -448,10 +494,26 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       const overNum = Math.floor(scorecard.legalBallsCount / 6);
       const ballInOver = (scorecard.legalBallsCount % 6) + 1;
 
+      // Bowler for this ball:
+      // - An explicit pick from the bowler sheet (over-end choice, or a
+      //   mid-over tactical change from More Actions) always wins, once.
+      // - Otherwise, on the first ball of a new over, auto-pick the first
+      //   eligible squad bowler so a quota-locked / just-finished bowler is
+      //   never silently re-credited with the next over.
+      // - Mid-over continuity falls back to the bowler of the previous ball.
+      const isNewOverStart = scorecard.legalBallsCount % 6 === 0;
+      let effectiveBowlerId = bowlerId;
+      if (selectedNextBowlerId) {
+        effectiveBowlerId = selectedNextBowlerId;
+      } else if (isNewOverStart) {
+        const autoPick = eligibleBowlers.find((b) => b.isEligible);
+        if (autoPick) effectiveBowlerId = autoPick.playerId;
+      }
+
       const commentary = generateBallCommentary(
         { runsBat, extraType, extraRuns, isLegal, wicket, shotDirection },
         strikerPlayer?.name || "Striker",
-        bowlerPlayer?.name || "Bowler"
+        playersMap[effectiveBowlerId]?.name || "Bowler"
       );
 
       const newBall: BallEvent = {
@@ -462,7 +524,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         ballInOver,
         strikerId,
         nonStrikerId,
-        bowlerId,
+        bowlerId: effectiveBowlerId,
         runsBat,
         extraType,
         extraRuns,
@@ -524,6 +586,9 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
       db.saveMatch(updatedMatch);
 
+      // The explicit bowler choice has been consumed by this ball.
+      if (selectedNextBowlerId) setSelectedNextBowlerId("");
+
       // Trigger Haptics
       if (wicket) triggerHaptic("wicket");
       else if (runsBat === 4) triggerHaptic("double");
@@ -541,24 +606,23 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         setShowWagonWheelModal(true);
       }
 
-      // Check if bowler needs to be chosen for next over
-      if (isEndOfOver && newLegalBallsCount < match.rules.overs * 6) {
-        setTimeout(() => {
-          setShowNextBowlerSheet(true);
-        }, 300);
-      }
+      // Check if bowler needs to be chosen for next over — handled by the
+      // isOverComplete auto-open effect above (once per over boundary,
+      // always dismissable). No timer-driven forced open here.
     },
     [
       ballEvents,
       bowlerId,
-      bowlerPlayer?.name,
       currentInningsData,
       currentInningsIndex,
+      eligibleBowlers,
       lastBall,
       match,
       nonStrikerId,
+      playersMap,
       scorecard.legalBallsCount,
       selectedNextBatterId,
+      selectedNextBowlerId,
       showWagonWheelModal,
       strikerId,
       strikerPlayer?.name,
@@ -641,25 +705,6 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   const availableNextBatters = battingSquadIds.filter((pId) => {
     const stat = scorecard.batters.find((b) => b.playerId === pId);
     return !stat || (!stat.isOut && pId !== strikerId && pId !== nonStrikerId);
-  });
-
-  // Eligible bowlers for next over
-  const eligibleBowlers = bowlingSquadIds.map((pId) => {
-    const stat = scorecard.bowlers.find((b) => b.playerId === pId);
-    const oversBowled = stat ? stat.legalBalls / 6 : 0;
-    const isConsecutive = match.rules.noConsecutiveOvers && bowlerId === pId;
-    const reachedMax = oversBowled >= match.rules.maxOversPerBowler;
-    let ineligibleReason = "";
-    if (isConsecutive) ineligibleReason = "Bowled previous over";
-    if (reachedMax) ineligibleReason = `Reached max quota (${match.rules.maxOversPerBowler} ov)`;
-
-    return {
-      playerId: pId,
-      player: playersMap[pId],
-      oversBowled,
-      isEligible: !isConsecutive && !reachedMax,
-      ineligibleReason,
-    };
   });
 
   const isLeftHandPad = settings.padHand === "left";
@@ -1643,13 +1688,20 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       </GullySheet>
 
       {/* --- NEXT BOWLER SHEET (END OF OVER) --- */}
+      {/* isOpen is purely state-driven; the over-boundary effect opens it once. */}
       <GullySheet
-        isOpen={showNextBowlerSheet || isOverComplete}
+        isOpen={showNextBowlerSheet}
         onClose={() => setShowNextBowlerSheet(false)}
         title="Select Bowler for Next Over"
       >
         <View style={{ flexDirection: "column", gap: 8 }}>
           <Text style={sheetLabel}>Bowling Team: {bowlingTeam?.name}</Text>
+          {eligibleBowlers.length > 0 && eligibleBowlers.every((b) => !b.isEligible) && (
+            <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2 }}>
+              No bowler is eligible under the current quota rules. Close this sheet to
+              continue with the previous bowler, or raise the quota in match rules.
+            </Text>
+          )}
           <ScrollView
             style={{ maxHeight: 256 }}
             contentContainerStyle={{ flexDirection: "column", gap: 6 }}
