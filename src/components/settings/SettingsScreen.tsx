@@ -129,8 +129,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   }, []);
   const [joinCode, setJoinCode] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
+  const [syncStatusKind, setSyncStatusKind] = useState<"error" | "success">("error");
 
-  const flashSyncStatus = (msg: string, ms = 5000) => {
+  const flashSyncStatus = (msg: string, ms = 5000, kind: "error" | "success" = "error") => {
+    setSyncStatusKind(kind);
     setSyncStatus(msg);
     setTimeout(() => setSyncStatus(""), ms);
   };
@@ -138,9 +140,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const handleJoinSpace = async () => {
     setSyncBusy(true);
     try {
-      await joinSpace(joinCode);
-      setSyncStatus("");
+      const name = await joinSpace(joinCode);
       setJoinCode("");
+      flashSyncStatus(
+        `Joined "${name}" — your data and the space are now synced.`,
+        6000,
+        "success"
+      );
     } catch (e) {
       flashSyncStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -151,8 +157,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const handleCreateSpace = async () => {
     setSyncBusy(true);
     try {
-      await createNewSpace("My GullyScore Space");
-      setSyncStatus("");
+      const code = await createNewSpace("My GullyScore Space");
+      flashSyncStatus(
+        `Space created — code ${code}. Share it with friends to sync.`,
+        8000,
+        "success"
+      );
     } catch (e) {
       flashSyncStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -486,6 +496,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   Join
                 </GullyButton>
               </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Use the demo Sync Space code"
+                onPress={() => setJoinCode("2XMAY93M")}
+                style={({ pressed }) => ({
+                  alignSelf: "flex-start",
+                  opacity: pressed ? 0.6 : 1,
+                  paddingVertical: 2,
+                })}
+              >
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontFamily: FONTS.sansSemiBold,
+                    color: colors.accent,
+                  }}
+                >
+                  New here? Try the demo space → 2XMAY93M
+                </Text>
+              </Pressable>
               <GullyButton
                 variant="quiet"
                 fullWidth
@@ -502,7 +532,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               style={{
                 fontSize: 11,
                 fontFamily: FONTS.sans,
-                color: colors.warning,
+                color:
+                  syncStatusKind === "success" ? colors.success : colors.warning,
               }}
             >
               {syncStatus}

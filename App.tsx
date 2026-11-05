@@ -10,7 +10,7 @@
  * - ErrorBoundary + font/boot gates
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -277,11 +277,18 @@ function MainTabs() {
 
 /* ------------------------------------------------------------------ */
 /* Boot gate: fonts + local DB before first paint                      */
+/* Resilience rules:                                                    */
+/*  - Font fallback: if the font files ever fail to load (e.g. a web    */
+/*    build missing the .ttf assets), proceed with system fonts after   */
+/*    8s instead of hanging on the splash forever.                      */
+/*  - DB/boot errors surface an inline retry card — the app never       */
+/*    white-screens or spins forever.                                   */
 /* ------------------------------------------------------------------ */
 
 function Root() {
   const { colors } = useTheme();
   const [booted, setBooted] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
   const [fontsLoaded] = useFonts({
     Nunito_400Regular,
     Nunito_500Medium,
@@ -290,19 +297,88 @@ function Root() {
     Baloo2_600SemiBold,
     Baloo2_700Bold,
   });
+  const [fontFallback, setFontFallback] = useState(false);
 
-  useEffect(() => {
-    (async () => {
+  const runBoot = useCallback(async () => {
+    setBootError(null);
+    try {
       await db.init();
       await initSync(); // load Sync Space meta (Supabase) before first paint
       setBooted(true);
       // SYNC.md trigger: app-start pull-then-push when a space is configured.
       // Best-effort — failures land in the Settings indicator, never block boot.
       void maybeAutoSync();
-    })();
+    } catch (e) {
+      setBootError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
-  if (!booted || !fontsLoaded) {
+  useEffect(() => {
+    void runBoot();
+    const t = setTimeout(() => setFontFallback(true), 8000);
+    return () => clearTimeout(t);
+  }, [runBoot]);
+
+  if (bootError) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colors.bg,
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 32,
+        }}
+      >
+        <Text
+          style={{
+            fontFamily: FONTS.serif,
+            fontSize: 22,
+            color: colors.ink,
+            textAlign: "center",
+          }}
+        >
+          Couldn’t load your data
+        </Text>
+        <Text
+          style={{
+            fontFamily: FONTS.sans,
+            fontSize: 14,
+            color: colors.ink2,
+            textAlign: "center",
+            marginTop: 8,
+          }}
+        >
+          {bootError}
+        </Text>
+        <Pressable
+          onPress={() => void runBoot()}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading"
+          style={({ pressed }) => ({
+            marginTop: 20,
+            paddingHorizontal: 24,
+            paddingVertical: 12,
+            borderRadius: 14,
+            backgroundColor: colors.accent,
+            opacity: pressed ? 0.85 : 1,
+          })}
+        >
+          <Text
+            style={{
+              fontFamily: FONTS.sansSemiBold,
+              fontSize: 15,
+              color: colors.bg,
+            }}
+          >
+            Try again
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!booted || (!fontsLoaded && !fontFallback)) {
     return (
       <View
         style={{
@@ -312,7 +388,20 @@ function Root() {
           justifyContent: "center",
         }}
       >
-        <ActivityIndicator color={colors.accent} />
+        <Text style={{ fontFamily: FONTS.serif, fontSize: 36, color: colors.ink }}>
+          GullyScore
+        </Text>
+        <Text
+          style={{
+            fontFamily: FONTS.sans,
+            fontSize: 14,
+            color: colors.ink2,
+            marginTop: 6,
+          }}
+        >
+          Loading your matches…
+        </Text>
+        <ActivityIndicator color={colors.accent} style={{ marginTop: 28 }} />
       </View>
     );
   }
