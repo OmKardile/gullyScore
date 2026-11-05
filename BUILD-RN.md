@@ -14,7 +14,9 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
 - Cloud sync (v1.4.0): Supabase Sync Spaces (docs/SYNC.md contract) —
   plain fetch, no SDK: Settings → Cloud Sync → join/create a space,
   pull-then-push with LWW + tombstones; the publishable key ships in the
-  app (same one as the Kotlin app; RLS protects data)
+  app (same one as the Kotlin app; RLS protects data). Settings also shows
+  a live backend indicator: "Online · No Space Joined" when reachable but
+  no space is configured (v1.4.1)
 - Icons: lucide-react-native | Charts: react-native-svg | App icon: generated
   from the design tokens (navy #0E1B2E / cricket-ball crimson #B4232A)
 
@@ -41,7 +43,7 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
     # do NOT lower it to 36 or the build fails).
 
     Output: android/app/build/outputs/apk/release/app-release.apk
-    (package dev.omkardile.gullyscore, versionName 1.4.0, minSdk 24, targetSdk 36)
+    (package dev.omkardile.gullyscore, versionName 1.4.1, minSdk 24, targetSdk 36)
 
 ### Route C — Ask the agent sandbox to build it
 The Android toolchain (JDK 21, SDK, NDK 27.1.12297006) fits in the sandbox;

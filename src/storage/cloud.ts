@@ -82,6 +82,29 @@ async function request(
   }
 }
 
+/**
+ * Backend reachability probe (no space code needed): gs_spaces with only the
+ * publishable key must return 200 + a JSON array (RLS hides every row without
+ * the x-gs-space header — empty array is the expected healthy answer).
+ */
+export async function probeBackend(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/gs_spaces?select=code&limit=1`, {
+        headers: headers(null),
+        signal: controller.signal,
+      });
+      return res.ok;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return false;
+  }
+}
+
 // ─── Spaces ────────────────────────────────────────────────────────────────
 
 /** Creates a Sync Space via RPC and returns its fresh 8-char code. */

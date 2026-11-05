@@ -20,6 +20,7 @@ import { Platform } from "react-native";
 import {
   CloudSyncError,
   createSpace,
+  probeBackend,
   probeSpace,
   pullRows,
   pushRows,
@@ -69,8 +70,14 @@ let loaded = false;
 let syncing = false;
 const listeners = new Set<() => void>();
 
+/** Live backend reachability (runtime only, re-probed on boot/sync/settings). */
+export type BackendStatus = "checking" | "online" | "offline";
+let backendStatus: BackendStatus = "checking";
+const backendListeners = new Set<() => void>();
+
 function notify() {
   listeners.forEach((l) => l());
+  backendListeners.forEach((l) => l());
 }
 
 function persist() {
@@ -100,6 +107,30 @@ export async function initSync(): Promise<void> {
     state = { ...DEFAULT_STATE, deviceTag: newDeviceTag() };
   }
   notify();
+  // Probe the Supabase backend once on boot — the Settings indicator shows
+  // "Online · No Space" instead of reading like an offline failure.
+  void refreshBackendStatus();
+}
+
+/** Probe the Supabase REST backend (reachable + key valid + RLS active). */
+export async function refreshBackendStatus(): Promise<void> {
+  backendStatus = "checking";
+  notify();
+  const online = await probeBackend();
+  backendStatus = online ? "online" : "offline";
+  notify();
+}
+
+export function getBackendStatus(): BackendStatus {
+  return backendStatus;
+}
+
+/** Listener for backend status changes (same channel as sync state). */
+export function subscribeBackendStatus(listener: () => void): () => void {
+  backendListeners.add(listener);
+  return () => {
+    backendListeners.delete(listener);
+  };
 }
 
 function newDeviceTag(): number {
@@ -355,6 +386,9 @@ export async function syncNow(): Promise<void> {
   syncing = true;
   notify();
   try {
+    const online = await probeBackend();
+    backendStatus = online ? "online" : "offline";
+    notify();
     // PULL — apply remote changes first so the push that follows is a
     // superset (server LWW rejects stale writes either way).
     const rows = await pullRows(state.code, state.lastPullMs);
@@ -386,6 +420,9 @@ export async function syncNow(): Promise<void> {
   } catch (e) {
     state.lastSyncAt = Date.now();
     state.lastResult = e instanceof Error ? e.message : String(e);
+    if (backendStatus === "checking") {
+      backendStatus = "offline";
+    }
     persist();
     notify();
     throw e;

@@ -29,10 +29,12 @@ import { Check, ChevronLeft, Cloud, CloudOff, HardDrive, RefreshCw } from "lucid
 import { db, AppSettings } from "../../storage/db";
 import {
   createNewSpace,
+  getBackendStatus,
   getSyncState,
   isSyncing,
   joinSpace,
   leaveSpace,
+  refreshBackendStatus,
   subscribeSync,
   syncNow,
 } from "../../storage/sync";
@@ -112,13 +114,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
   // --- Cloud Sync (Supabase Sync Spaces v1) ---
   const [syncState, setSyncState] = useState(getSyncState());
+  const [backend, setBackend] = useState(getBackendStatus());
   const [syncBusy, setSyncBusy] = useState(false);
   useEffect(() => {
     const reread = () => {
       setSyncState(getSyncState());
+      setBackend(getBackendStatus());
       setSyncBusy(isSyncing());
     };
     reread();
+    // re-probe the backend every time Settings opens (cheap, no space needed)
+    void refreshBackendStatus();
     return subscribeSync(reread);
   }, []);
   const [joinCode, setJoinCode] = useState("");
@@ -381,8 +387,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     width: 7,
                     height: 7,
                     borderRadius: 4,
-                    backgroundColor: syncState.code ? colors.success : colors.ink2,
-                    opacity: syncState.code ? 1 : 0.5,
+                    backgroundColor:
+                      backend === "offline" ? colors.warning : backend === "online" ? colors.success : colors.ink2,
+                    opacity: backend === "checking" ? 0.5 : 1,
                   }}
                 />
                 <Text
@@ -393,9 +400,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     color: colors.ink,
                   }}
                 >
-                  {syncState.code
-                    ? "Cloud Sync (Supabase) — Connected"
-                    : "Cloud Sync (Supabase) — Not Connected"}
+                  {backend === "checking"
+                    ? "Cloud Sync (Supabase) — Checking Backend…"
+                    : backend === "offline"
+                      ? "Cloud Sync (Supabase) — Unreachable (Offline)"
+                      : syncState.code
+                        ? "Cloud Sync (Supabase) — Connected"
+                        : "Cloud Sync (Supabase) — Online · No Space Joined"}
                 </Text>
               </View>
               {syncState.code ? (
@@ -429,9 +440,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 </>
               ) : (
                 <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
-                  Join a Sync Space to mirror teams, players and matches to the cloud
-                  and share them across devices. Offline-first: your data stays on
-                  this device either way.
+                  Supabase backend is reachable. Syncing is space-scoped: create a
+                  Sync Space below (or join a friend's 8-char code) to turn on
+                  cloud sync — the code IS the account, and your data always
+                  stays on this device first.
                 </Text>
               )}
             </View>
@@ -693,7 +705,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           ]}
         >
           <Text style={{ fontSize: 16, fontFamily: FONTS.serif, fontWeight: "700", color: colors.ink }}>
-            GullyScore v1.4.0
+            GullyScore v1.4.1
           </Text>
           <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2, textAlign: "center" }}>
             Offline-first cricket scoring &amp; stats for local teams.
