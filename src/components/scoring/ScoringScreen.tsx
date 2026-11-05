@@ -21,6 +21,7 @@ import {
   Pressable,
   SafeAreaView,
   ScrollView,
+  StyleSheet,
   Text,
   Vibration,
   View,
@@ -91,7 +92,10 @@ function chunked<T>(items: T[], size: number): T[][] {
   return rows;
 }
 
-/** Centered overlay dialog — RN port of the web's `fixed inset-0 z-50` modals. */
+/** Centered overlay dialog — RN port of the web's `fixed inset-0 z-50` modals.
+ * The backdrop is a DISMISSABLE sibling Pressable: tapping outside the dialog
+ * calls onRequestClose (web users previously tapped the dark area, nothing
+ * happened, and the screen read as "stuck"). */
 const CenteredModal: React.FC<{
   visible: boolean;
   onRequestClose?: () => void;
@@ -109,9 +113,15 @@ const CenteredModal: React.FC<{
         alignItems: "center",
         justifyContent: "center",
         padding: 16,
-        backgroundColor: "rgba(0,0,0,0.6)", // bg-black/60
       }}
     >
+      <Pressable
+        style={[
+          StyleSheet.absoluteFill,
+          { backgroundColor: "rgba(0,0,0,0.6)" }, // bg-black/60
+        ]}
+        onPress={() => onRequestClose?.()}
+      />
       {children}
     </View>
   </Modal>
@@ -475,11 +485,24 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       lastOverBoundaryRef.current !== scorecard.legalBallsCount
     ) {
       lastOverBoundaryRef.current = scorecard.legalBallsCount;
+      // Defense in depth: the mandatory bowler sheet takes priority over the
+      // optional shot-direction prompt — never stack two blocking overlays
+      // (the wagon modal's full-screen backdrop hides this sheet behind a
+      // dark layer, which is exactly the "stuck screen" users reported).
+      if (showWagonWheelModal) {
+        setShowWagonWheelModal(false);
+        setPendingWagonBall(null);
+      }
       setShowNextBowlerSheet(true);
     }
-  }, [isOverComplete, scorecard.legalBallsCount, showNextBowlerSheet]);
+  }, [isOverComplete, scorecard.legalBallsCount, showNextBowlerSheet, showWagonWheelModal]);
 
-  // Handle recorded ball event
+  // Handle recorded ball event.
+  // LIVE-STATE RULE: every input is re-read from the db at call time. React
+  // state (`match`, `ballEvents`, `scorecard`) updates are async, so a fast
+  // tapper could otherwise fire recordBall twice against the SAME stale
+  // snapshot — both balls got the same id/seq and overwrote each other, which
+  // made the pad silently swallow taps (the "screen hangs" report).
   const recordBall = useCallback(
     (
       runsBat: number,
@@ -488,11 +511,40 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       wicket?: DismissalInfo,
       shotDirection?: ShotDirection
     ) => {
+      const liveMatch = db.getMatch(matchId);
+      if (!liveMatch) return;
+      const liveInnIdx = liveMatch.currentInningsIndex;
+      const liveInn = liveMatch.innings[liveInnIdx];
+      if (!liveInn) return;
+
+      const liveEvents = liveInn.ballEvents;
+      const liveBattingSquadIds =
+        liveInn.battingTeamId === liveMatch.teamAId
+          ? liveMatch.teamAPlayerIds
+          : liveMatch.teamBPlayerIds;
+      const liveBowlingSquadIds =
+        liveInn.bowlingTeamId === liveMatch.teamAId
+          ? liveMatch.teamAPlayerIds
+          : liveMatch.teamBPlayerIds;
+      const liveSc = replayInnings(
+        liveEvents,
+        liveMatch.rules,
+        liveBattingSquadIds,
+        liveBowlingSquadIds,
+        playersMap,
+        liveInn.targetRuns,
+        liveInn.isSuperOver
+      );
+      const liveLastBall = liveEvents[liveEvents.length - 1];
+      const liveStrikerId = liveLastBall?.strikerId || liveBattingSquadIds[0] || "";
+      const liveNonStrikerId = liveLastBall?.nonStrikerId || liveBattingSquadIds[1] || "";
+      const liveBowlerId = liveLastBall?.bowlerId || liveBowlingSquadIds[0] || "";
+
       const isLegal = extraType !== "wide" && extraType !== "no_ball";
-      const isFreeHit = lastBall ? lastBall.extraType === "no_ball" : false;
-      const nextSeq = ballEvents.length + 1;
-      const overNum = Math.floor(scorecard.legalBallsCount / 6);
-      const ballInOver = (scorecard.legalBallsCount % 6) + 1;
+      const isFreeHit = liveLastBall ? liveLastBall.extraType === "no_ball" : false;
+      const nextSeq = liveEvents.length + 1;
+      const overNum = Math.floor(liveSc.legalBallsCount / 6);
+      const ballInOver = (liveSc.legalBallsCount % 6) + 1;
 
       // Bowler for this ball:
       // - An explicit pick from the bowler sheet (over-end choice, or a
@@ -501,29 +553,39 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       //   eligible squad bowler so a quota-locked / just-finished bowler is
       //   never silently re-credited with the next over.
       // - Mid-over continuity falls back to the bowler of the previous ball.
-      const isNewOverStart = scorecard.legalBallsCount % 6 === 0;
-      let effectiveBowlerId = bowlerId;
+      // Eligibility is recomputed from the LIVE scorecard, not the stale one.
+      const isNewOverStart = liveSc.legalBallsCount % 6 === 0;
+      let effectiveBowlerId = liveBowlerId;
       if (selectedNextBowlerId) {
         effectiveBowlerId = selectedNextBowlerId;
       } else if (isNewOverStart) {
-        const autoPick = eligibleBowlers.find((b) => b.isEligible);
+        const autoPick = liveBowlingSquadIds
+          .map((pId) => {
+            const stat = liveSc.bowlers.find((b) => b.playerId === pId);
+            const oversBowled = stat ? stat.legalBalls / 6 : 0;
+            const isConsecutive =
+              liveMatch.rules.noConsecutiveOvers && liveEvents.length > 0 && liveBowlerId === pId;
+            const reachedMax = oversBowled >= liveMatch.rules.maxOversPerBowler;
+            return { playerId: pId, isEligible: !isConsecutive && !reachedMax };
+          })
+          .find((b) => b.isEligible);
         if (autoPick) effectiveBowlerId = autoPick.playerId;
       }
 
       const commentary = generateBallCommentary(
         { runsBat, extraType, extraRuns, isLegal, wicket, shotDirection },
-        strikerPlayer?.name || "Striker",
+        playersMap[liveStrikerId]?.name || "Striker",
         playersMap[effectiveBowlerId]?.name || "Bowler"
       );
 
       const newBall: BallEvent = {
-        id: `ball_${Date.now()}_${nextSeq}`,
+        id: `ball_${Date.now()}_${nextSeq}_${Math.random().toString(36).slice(2, 8)}`,
         seq: nextSeq,
-        inningsIndex: currentInningsIndex,
+        inningsIndex: liveInnIdx,
         overNumber: overNum,
         ballInOver,
-        strikerId,
-        nonStrikerId,
+        strikerId: liveStrikerId,
+        nonStrikerId: liveNonStrikerId,
         bowlerId: effectiveBowlerId,
         runsBat,
         extraType,
@@ -537,8 +599,8 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       };
 
       // Determine next striker / non-striker
-      let nextStriker = strikerId;
-      let nextNonStriker = nonStrikerId;
+      let nextStriker = liveStrikerId;
+      let nextNonStriker = liveNonStrikerId;
 
       // Strike rotation logic:
       // Odd runs swap strike
@@ -554,7 +616,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
       // If wicket fell, assign next batter
       if (wicket && selectedNextBatterId) {
-        if (wicket.dismissedEnd === "striker" || wicket.dismissedPlayerId === strikerId) {
+        if (wicket.dismissedEnd === "striker" || wicket.dismissedPlayerId === liveStrikerId) {
           nextStriker = selectedNextBatterId;
         } else {
           nextNonStriker = selectedNextBatterId;
@@ -562,25 +624,25 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       }
 
       // Check if over ends after this legal ball
-      const newLegalBallsCount = scorecard.legalBallsCount + (isLegal ? 1 : 0);
+      const newLegalBallsCount = liveSc.legalBallsCount + (isLegal ? 1 : 0);
       const isEndOfOver = isLegal && newLegalBallsCount % 6 === 0;
 
-      if (isEndOfOver && !match.rules.lastManBatting) {
+      if (isEndOfOver && !liveMatch.rules.lastManBatting) {
         // Switch ends at over end
         const tmp = nextStriker;
         nextStriker = nextNonStriker;
         nextNonStriker = tmp;
       }
 
-      const updatedEvents = [...ballEvents, newBall];
-      const updatedInnings = [...match.innings];
-      updatedInnings[currentInningsIndex] = {
-        ...currentInningsData,
+      const updatedEvents = [...liveEvents, newBall];
+      const updatedInnings = [...liveMatch.innings];
+      updatedInnings[liveInnIdx] = {
+        ...liveInn,
         ballEvents: updatedEvents,
       };
 
       const updatedMatch: Match = {
-        ...match,
+        ...liveMatch,
         innings: updatedInnings,
       };
 
@@ -595,12 +657,18 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       else if (runsBat === 6) triggerHaptic("firm");
       else triggerHaptic("light");
 
-      // Optional wagon wheel prompt if boundary/scoring shot and enabled
+      // Optional wagon wheel prompt if boundary/scoring shot and enabled.
+      // SUPPRESSED on the over's last ball: the mandatory next-bowler sheet
+      // opens at that moment and the wagon modal's full-screen backdrop used
+      // to stack on top of it — the dark overlay hid the bowler sheet and the
+      // screen looked frozen until the user found "Skip (One Tap)". The
+      // direction can still be set later from the Ball Log.
       if (
         runsBat > 0 &&
-        match.rules.trackShotDirection &&
+        liveMatch.rules.trackShotDirection &&
         !shotDirection &&
-        !showWagonWheelModal
+        !showWagonWheelModal &&
+        !isEndOfOver
       ) {
         setPendingWagonBall(newBall);
         setShowWagonWheelModal(true);
@@ -611,49 +679,43 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       // always dismissable). No timer-driven forced open here.
     },
     [
-      ballEvents,
-      bowlerId,
-      currentInningsData,
-      currentInningsIndex,
-      eligibleBowlers,
-      lastBall,
-      match,
-      nonStrikerId,
+      matchId,
       playersMap,
-      scorecard.legalBallsCount,
-      selectedNextBatterId,
-      selectedNextBowlerId,
       showWagonWheelModal,
-      strikerId,
-      strikerPlayer?.name,
+      selectedNextBowlerId,
+      selectedNextBatterId,
       triggerHaptic,
     ]
   );
 
-  // Undo last ball
+  // Undo last ball — live db read so rapid undos remove exactly one ball
+  // per tap (React state is async and would otherwise replay the same slice).
   const handleUndo = () => {
-    if (ballEvents.length === 0) return;
-    const updatedEvents = ballEvents.slice(0, -1);
-    const updatedInnings = [...match.innings];
-    updatedInnings[currentInningsIndex] = {
-      ...currentInningsData,
-      ballEvents: updatedEvents,
-    };
-    db.saveMatch({ ...match, innings: updatedInnings });
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch) return;
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn || liveInn.ballEvents.length === 0) return;
+    const updatedEvents = liveInn.ballEvents.slice(0, -1);
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updatedEvents };
+    db.saveMatch({ ...liveMatch, innings: updatedInnings });
     triggerHaptic("undo");
   };
 
-  // Swap striker manually
+  // Swap striker manually (live db read — same stale-state guard as undo)
   const handleSwapStriker = () => {
-    if (ballEvents.length === 0) return;
-    const last = { ...ballEvents[ballEvents.length - 1] };
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch) return;
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn || liveInn.ballEvents.length === 0) return;
+    const last = { ...liveInn.ballEvents[liveInn.ballEvents.length - 1] };
     const tmp = last.strikerId;
     last.strikerId = last.nonStrikerId;
     last.nonStrikerId = tmp;
-    const updated = [...ballEvents.slice(0, -1), last];
-    const updatedInnings = [...match.innings];
-    updatedInnings[currentInningsIndex] = { ...currentInningsData, ballEvents: updated };
-    db.saveMatch({ ...match, innings: updatedInnings });
+    const updated = [...liveInn.ballEvents.slice(0, -1), last];
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updated };
+    db.saveMatch({ ...liveMatch, innings: updatedInnings });
     triggerHaptic("light");
   };
 
@@ -688,15 +750,19 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     setSelectedNextBatterId("");
   };
 
-  // Save wagon wheel shot direction
+  // Save wagon wheel shot direction (live db read — the pending ball is
+  // matched against the newest persisted events, never a stale snapshot)
   const handleSaveShotDirection = (dir: ShotDirection) => {
-    if (!pendingWagonBall) return;
-    const updatedEvents = ballEvents.map((b) =>
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch || !pendingWagonBall) return;
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn) return;
+    const updatedEvents = liveInn.ballEvents.map((b) =>
       b.id === pendingWagonBall.id ? { ...b, shotDirection: dir } : b
     );
-    const updatedInnings = [...match.innings];
-    updatedInnings[currentInningsIndex] = { ...currentInningsData, ballEvents: updatedEvents };
-    db.saveMatch({ ...match, innings: updatedInnings });
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updatedEvents };
+    db.saveMatch({ ...liveMatch, innings: updatedInnings });
     setShowWagonWheelModal(false);
     setPendingWagonBall(null);
   };
@@ -1807,14 +1873,19 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                     <Pressable
                       onPress={() => {
-                        // Delete this specific ball and recompute
-                        const updated = ballEvents.filter((b) => b.id !== ball.id);
-                        const updatedInnings = [...match.innings];
-                        updatedInnings[currentInningsIndex] = {
-                          ...currentInningsData,
+                        // Delete this specific ball and recompute (live db read
+                        // so the edit always applies to the newest state)
+                        const liveMatch = db.getMatch(matchId);
+                        if (!liveMatch) return;
+                        const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+                        if (!liveInn) return;
+                        const updated = liveInn.ballEvents.filter((b) => b.id !== ball.id);
+                        const updatedInnings = [...liveMatch.innings];
+                        updatedInnings[liveMatch.currentInningsIndex] = {
+                          ...liveInn,
                           ballEvents: updated,
                         };
-                        db.saveMatch({ ...match, innings: updatedInnings });
+                        db.saveMatch({ ...liveMatch, innings: updatedInnings });
                       }}
                       style={({ pressed }) => ({
                         paddingHorizontal: 8,

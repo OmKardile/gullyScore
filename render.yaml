@@ -1,0 +1,22 @@
+# GullyScore web — Render Blueprint
+#
+# Deploys the pre-built static export in ./dist.
+# The build command is a no-op because dist/ is committed and up to date.
+# (To build on Render instead: buildCommand: npm ci && npx expo export --platform web)
+services:
+  - type: web
+    name: gullyscore
+    runtime: static
+    buildCommand: echo "Serving pre-built dist/"
+    staticPublishPath: ./dist
+    routes:
+      # SPA fallback. Safe: Render always serves an existing static resource
+      # first; this rewrite only applies to paths with no matching file.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Hashed filenames in /_expo/static/* — safe to cache forever.
+      - path: /_expo/static/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
