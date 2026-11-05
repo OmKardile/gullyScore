@@ -28,15 +28,7 @@ import {
   createNativeStackNavigator,
   NativeStackScreenProps,
 } from "@react-navigation/native-stack";
-import {
-  useFonts,
-  Nunito_400Regular,
-  Nunito_500Medium,
-  Nunito_600SemiBold,
-  Nunito_700Bold,
-  Baloo2_600SemiBold,
-  Baloo2_700Bold,
-} from "./src/design/fonts";
+import { useAppFonts } from "./src/design/fonts";
 import { db } from "./src/storage/db";
 import { initSync, maybeAutoSync } from "./src/storage/sync";
 import { ThemeProvider, useTheme, FONTS } from "./src/design/theme";
@@ -289,14 +281,7 @@ function Root() {
   const { colors } = useTheme();
   const [booted, setBooted] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [fontsLoaded] = useFonts({
-    Nunito_400Regular,
-    Nunito_500Medium,
-    Nunito_600SemiBold,
-    Nunito_700Bold,
-    Baloo2_600SemiBold,
-    Baloo2_700Bold,
-  });
+  const [fontsLoaded] = useAppFonts();
   const [fontFallback, setFontFallback] = useState(false);
 
   const runBoot = useCallback(async () => {
