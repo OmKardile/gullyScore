@@ -25,8 +25,17 @@ import {
 // RN: dropped web-only Moon/Sun/Smartphone/Vibrate imports (unused on web too)
 // and Download/Upload/RefreshCw/Palette/HelpCircle button icons (Svg cannot
 // nest inside GullyButton's Text children).
-import { Check, ChevronLeft, CloudOff, HardDrive } from "lucide-react-native";
+import { Check, ChevronLeft, Cloud, CloudOff, HardDrive, RefreshCw } from "lucide-react-native";
 import { db, AppSettings } from "../../storage/db";
+import {
+  createNewSpace,
+  getSyncState,
+  isSyncing,
+  joinSpace,
+  leaveSpace,
+  subscribeSync,
+  syncNow,
+} from "../../storage/sync";
 import {
   GullyButton,
   GullySheet,
@@ -100,6 +109,66 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [importText, setImportText] = useState("");
   // RN: window.confirm → inline confirm row state.
   const [confirmReset, setConfirmReset] = useState(false);
+
+  // --- Cloud Sync (Supabase Sync Spaces v1) ---
+  const [syncState, setSyncState] = useState(getSyncState());
+  const [syncBusy, setSyncBusy] = useState(false);
+  useEffect(() => {
+    const reread = () => {
+      setSyncState(getSyncState());
+      setSyncBusy(isSyncing());
+    };
+    reread();
+    return subscribeSync(reread);
+  }, []);
+  const [joinCode, setJoinCode] = useState("");
+  const [syncStatus, setSyncStatus] = useState("");
+
+  const flashSyncStatus = (msg: string, ms = 5000) => {
+    setSyncStatus(msg);
+    setTimeout(() => setSyncStatus(""), ms);
+  };
+
+  const handleJoinSpace = async () => {
+    setSyncBusy(true);
+    try {
+      await joinSpace(joinCode);
+      setSyncStatus("");
+      setJoinCode("");
+    } catch (e) {
+      flashSyncStatus(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleCreateSpace = async () => {
+    setSyncBusy(true);
+    try {
+      await createNewSpace("My GullyScore Space");
+      setSyncStatus("");
+    } catch (e) {
+      flashSyncStatus(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleSyncNow = async () => {
+    setSyncBusy(true);
+    try {
+      await syncNow();
+    } catch (e) {
+      flashSyncStatus(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleLeaveSpace = () => {
+    leaveSpace();
+    flashSyncStatus("Left the Sync Space. Your data stays on this device.", 6000);
+  };
 
   const handleUpdate = (patch: Partial<AppSettings>) => {
     db.saveSettings(patch);
@@ -278,6 +347,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             </View>
           </View>
 
+          {/* Cloud Sync (Supabase) — functional Sync Spaces v1 client */}
           <View
             style={{
               flexDirection: "row",
@@ -298,7 +368,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 backgroundColor: colors.accentSubtle,
               }}
             >
-              <CloudOff size={18} strokeWidth={1.8} color={colors.ink2} />
+              {syncState.code ? (
+                <Cloud size={18} strokeWidth={1.8} color={colors.success} />
+              ) : (
+                <CloudOff size={18} strokeWidth={1.8} color={colors.ink2} />
+              )}
             </View>
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -307,8 +381,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     width: 7,
                     height: 7,
                     borderRadius: 4,
-                    backgroundColor: colors.ink2,
-                    opacity: 0.5,
+                    backgroundColor: syncState.code ? colors.success : colors.ink2,
+                    opacity: syncState.code ? 1 : 0.5,
                   }}
                 />
                 <Text
@@ -319,15 +393,109 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     color: colors.ink,
                   }}
                 >
-                  Cloud Sync (Supabase) — Not Connected
+                  {syncState.code
+                    ? "Cloud Sync (Supabase) — Connected"
+                    : "Cloud Sync (Supabase) — Not Connected"}
                 </Text>
               </View>
-              <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
-                Your cricket data never leaves this device. Use Export / Import
-                below to move it between phones.
-              </Text>
+              {syncState.code ? (
+                <>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontFamily: FONTS.sans,
+                      color: colors.ink2,
+                      marginTop: 2,
+                    }}
+                    testID="sync-space-line"
+                  >
+                    {syncState.name} · Space code {syncState.code} — share the code with
+                    friends to sync matches together.
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontFamily: FONTS.sans,
+                      color: syncState.lastResult === "ok" ? colors.ink2 : colors.warning,
+                      marginTop: 2,
+                    }}
+                  >
+                    {syncState.lastResult === "ok"
+                      ? `Last sync ${new Date(syncState.lastSyncAt).toLocaleTimeString()} · pushed ${syncState.lastSyncedCounts.pushed} · pulled ${syncState.lastSyncedCounts.pulled} rows`
+                      : syncState.lastResult
+                        ? `Last sync failed: ${syncState.lastResult}`
+                        : "Connected — run your first sync."}
+                  </Text>
+                </>
+              ) : (
+                <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
+                  Join a Sync Space to mirror teams, players and matches to the cloud
+                  and share them across devices. Offline-first: your data stays on
+                  this device either way.
+                </Text>
+              )}
             </View>
           </View>
+
+          {syncState.code ? (
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <GullyButton
+                variant="quiet"
+                fullWidth
+                disabled={syncBusy}
+                onPress={handleSyncNow}
+              >
+                {syncBusy ? "Syncing…" : "Sync Now"}
+              </GullyButton>
+              <GullyButton
+                variant="quiet"
+                fullWidth
+                disabled={syncBusy}
+                onPress={handleLeaveSpace}
+              >
+                Leave Space
+              </GullyButton>
+            </View>
+          ) : (
+            <View style={{ flexDirection: "column", gap: 8 }}>
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-end" }}>
+                <View style={{ flex: 1 }}>
+                  <GullyTextField
+                    label="Sync Space code (8 characters)"
+                    value={joinCode}
+                    onChangeText={(t: string) => setJoinCode(t.toUpperCase().slice(0, 8))}
+                  />
+                </View>
+                <GullyButton
+                  variant="primary"
+                  disabled={syncBusy || joinCode.length !== 8}
+                  onPress={handleJoinSpace}
+                >
+                  Join
+                </GullyButton>
+              </View>
+              <GullyButton
+                variant="quiet"
+                fullWidth
+                disabled={syncBusy}
+                onPress={handleCreateSpace}
+              >
+                {syncBusy ? "Creating…" : "Create New Sync Space"}
+              </GullyButton>
+            </View>
+          )}
+
+          {syncStatus ? (
+            <Text
+              style={{
+                fontSize: 11,
+                fontFamily: FONTS.sans,
+                color: colors.warning,
+              }}
+            >
+              {syncStatus}
+            </Text>
+          ) : null}
         </View>
 
         {/* Appearance & Hardware */}
@@ -525,7 +693,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           ]}
         >
           <Text style={{ fontSize: 16, fontFamily: FONTS.serif, fontWeight: "700", color: colors.ink }}>
-            GullyScore v1.3.0
+            GullyScore v1.4.0
           </Text>
           <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2, textAlign: "center" }}>
             Offline-first cricket scoring &amp; stats for local teams.

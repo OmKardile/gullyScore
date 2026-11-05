@@ -149,6 +149,7 @@ class GullyDb {
   }
 
   public savePlayer(player: Player) {
+    player.updatedAt = Date.now();
     this.players[player.id] = player;
     this.persist(STORAGE_KEY_PLAYERS, this.players);
     this.notify();
@@ -187,6 +188,7 @@ class GullyDb {
       // Archive instead of hard delete
       if (this.players[id]) {
         this.players[id].isArchived = true;
+        this.players[id].updatedAt = Date.now();
         this.persist(STORAGE_KEY_PLAYERS, this.players);
         this.notify();
       }
@@ -196,6 +198,9 @@ class GullyDb {
       // remove from teams
       Object.values(this.teams).forEach((t) => {
         t.playerIds = t.playerIds.filter((p) => p !== id);
+      });
+      Object.values(this.teams).forEach((t) => {
+        if (t.playerIds.length) t.updatedAt = Date.now();
       });
       this.persist(STORAGE_KEY_PLAYERS, this.players);
       this.persist(STORAGE_KEY_TEAMS, this.teams);
@@ -218,6 +223,7 @@ class GullyDb {
   }
 
   public saveTeam(team: Team) {
+    team.updatedAt = Date.now();
     this.teams[team.id] = team;
     this.persist(STORAGE_KEY_TEAMS, this.teams);
     this.notify();
@@ -230,6 +236,7 @@ class GullyDb {
     if (hasHistory) {
       if (this.teams[id]) {
         this.teams[id].isArchived = true;
+        this.teams[id].updatedAt = Date.now();
         this.persist(STORAGE_KEY_TEAMS, this.teams);
         this.notify();
       }
@@ -331,6 +338,7 @@ class GullyDb {
   }
 
   public saveTournament(tournament: Tournament) {
+    tournament.updatedAt = Date.now();
     this.tournaments[tournament.id] = tournament;
     this.persist(STORAGE_KEY_TOURNAMENTS, this.tournaments);
     this.notify();
@@ -345,8 +353,67 @@ class GullyDb {
   }
 
   public saveFixture(fixture: Fixture) {
+    fixture.updatedAt = Date.now();
     this.fixtures[fixture.id] = fixture;
     this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+    this.notify();
+  }
+
+  // --- Cloud sync application points (Supabase Sync Spaces v1) ---
+  // Upsert a row pulled from the cloud WITHOUT stamping the local clock:
+  // the remote `updated_at` (already written into entity.updatedAt by the
+  // sync coordinator) is the LWW authority. These deliberately skip
+  // notify() — the coordinator calls notifyDataChanged() once per sync so
+  // screens re-render a single time instead of per row.
+  public applySyncedPlayer(p: Player) {
+    this.players[p.id] = p;
+    this.persist(STORAGE_KEY_PLAYERS, this.players);
+  }
+
+  public applySyncedTeam(t: Team) {
+    this.teams[t.id] = t;
+    this.persist(STORAGE_KEY_TEAMS, this.teams);
+  }
+
+  public applySyncedMatch(m: Match) {
+    this.matches[m.id] = m;
+    this.persist(STORAGE_KEY_MATCHES, this.matches);
+    if (m.status === "live") {
+      this.setActiveMatchId(m.id);
+    } else if (this.activeMatchId === m.id && m.status === "completed") {
+      this.setActiveMatchId(null);
+    }
+  }
+
+  public applySyncedTournament(t: Tournament) {
+    this.tournaments[t.id] = t;
+    this.persist(STORAGE_KEY_TOURNAMENTS, this.tournaments);
+  }
+
+  public applySyncedFixture(f: Fixture) {
+    this.fixtures[f.id] = f;
+    this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+  }
+
+  /** Tombstone application: remove a cloud-deleted entity. */
+  public removeSyncedEntity(kind: "player" | "team" | "match" | "tournament" | "fixture", localId: string) {
+    if (kind === "player") delete this.players[localId];
+    if (kind === "team") delete this.teams[localId];
+    if (kind === "match") {
+      delete this.matches[localId];
+      if (this.activeMatchId === localId) this.setActiveMatchId(null);
+    }
+    if (kind === "tournament") delete this.tournaments[localId];
+    if (kind === "fixture") delete this.fixtures[localId];
+    this.persist(STORAGE_KEY_PLAYERS, this.players);
+    this.persist(STORAGE_KEY_TEAMS, this.teams);
+    this.persist(STORAGE_KEY_MATCHES, this.matches);
+    this.persist(STORAGE_KEY_TOURNAMENTS, this.tournaments);
+    this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+  }
+
+  /** One re-render after a batch of cloud rows was applied. */
+  public notifyDataChanged() {
     this.notify();
   }
 

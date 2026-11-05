@@ -38,6 +38,7 @@ import {
   Baloo2_700Bold,
 } from "./src/design/fonts";
 import { db } from "./src/storage/db";
+import { initSync, maybeAutoSync } from "./src/storage/sync";
 import { ThemeProvider, useTheme, FONTS } from "./src/design/theme";
 import { ErrorBoundary } from "./src/components/common/ErrorBoundary";
 import { HomeScreen } from "./src/components/home/HomeScreen";
@@ -291,7 +292,14 @@ function Root() {
   });
 
   useEffect(() => {
-    db.init().then(() => setBooted(true));
+    (async () => {
+      await db.init();
+      await initSync(); // load Sync Space meta (Supabase) before first paint
+      setBooted(true);
+      // SYNC.md trigger: app-start pull-then-push when a space is configured.
+      // Best-effort — failures land in the Settings indicator, never block boot.
+      void maybeAutoSync();
+    })();
   }, []);
 
   if (!booted || !fontsLoaded) {

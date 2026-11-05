@@ -1,6 +1,6 @@
 {
   "name": "gullyscorern",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/baloo-2": "^0.4.2",
@@ -30,7 +30,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
-    "check": "tsc --noEmit",
+    "check": "node --stack-size=16000 node_modules/typescript/bin/tsc --noEmit",
     "apk:local": "expo prebuild -p android --clean && cd android && ./gradlew assembleRelease"
   },
   "private": true

@@ -11,6 +11,10 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
   no native config needed)
 - Storage: AsyncStorage (same synchronous API as the web localStorage engine,
   hydrated once at boot via `db.init()`) — offline-first, no cloud account
+- Cloud sync (v1.4.0): Supabase Sync Spaces (docs/SYNC.md contract) —
+  plain fetch, no SDK: Settings → Cloud Sync → join/create a space,
+  pull-then-push with LWW + tombstones; the publishable key ships in the
+  app (same one as the Kotlin app; RLS protects data)
 - Icons: lucide-react-native | Charts: react-native-svg | App icon: generated
   from the design tokens (navy #0E1B2E / cricket-ball crimson #B4232A)
 
@@ -37,7 +41,7 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
     # do NOT lower it to 36 or the build fails).
 
     Output: android/app/build/outputs/apk/release/app-release.apk
-    (package dev.omkardile.gullyscore, versionName 1.3.0, minSdk 24, targetSdk 36)
+    (package dev.omkardile.gullyscore, versionName 1.4.0, minSdk 24, targetSdk 36)
 
 ### Route C — Ask the agent sandbox to build it
 The Android toolchain (JDK 21, SDK, NDK 27.1.12297006) fits in the sandbox;

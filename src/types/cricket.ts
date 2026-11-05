@@ -25,6 +25,8 @@ export interface Player {
   photoUri?: string;
   isArchived: boolean;
   createdAt: number;
+  /** epoch ms of the last local edit — cloud sync LWW cursor (Sync Contract v1) */
+  updatedAt?: number;
 }
 
 export interface Team {
@@ -37,6 +39,8 @@ export interface Team {
   playerIds: string[];
   isArchived?: boolean;
   createdAt: number;
+  /** epoch ms of the last local edit — cloud sync LWW cursor (Sync Contract v1) */
+  updatedAt?: number;
 }
 
 export type BallType = "tennis" | "leather" | "box";
@@ -253,6 +257,8 @@ export interface Tournament {
   tiePoints: number;
   nrPoints: number;
   createdAt: number;
+  /** epoch ms of the last local edit — cloud sync LWW cursor (Sync Contract v1) */
+  updatedAt?: number;
 }
 
 export interface Fixture {
@@ -265,6 +271,8 @@ export interface Fixture {
   scheduledDate?: string;
   venue?: string;
   status: "pending" | "completed";
+  /** epoch ms of the last local edit — cloud sync LWW cursor (Sync Contract v1) */
+  updatedAt?: number;
 }
 
 export interface PointsTableRow {
