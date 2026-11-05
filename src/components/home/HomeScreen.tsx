@@ -27,6 +27,12 @@ import {
 } from "react-native";
 import { Match, Fixture } from "../../types/cricket";
 import { db } from "../../storage/db";
+import {
+  BackendStatus,
+  getBackendStatus,
+  getSyncState,
+  subscribeBackendStatus,
+} from "../../storage/sync";
 import { GullyButton } from "../common/Components";
 import {
   Plus,
@@ -59,6 +65,17 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [fixtures, setFixtures] = useState<Fixture[]>(() => db.getFixtures());
   const [matchFilter, setMatchFilter] = useState<"active" | "archived" | "all">("active");
   const [toastMessage, setToastMessage] = useState<{ text: string; matchId?: string } | null>(null);
+
+  // Live cloud-sync badge (same channel the Settings indicator uses).
+  const [backend, setBackend] = useState<BackendStatus>(getBackendStatus());
+  const [spaceCode, setSpaceCode] = useState<string | null>(getSyncState().code);
+  useEffect(() => {
+    const reread = () => {
+      setBackend(getBackendStatus());
+      setSpaceCode(getSyncState().code);
+    };
+    return subscribeBackendStatus(reread);
+  }, []);
 
   // RN: web `animate-pulse` on the live dot → trivial Animated loop.
   const pulse = useRef(new Animated.Value(1)).current;
@@ -138,9 +155,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             GullyScore
           </Text>
           <Text
+            testID="home-sync-badge"
             style={{
               fontSize: 10,
-              color: colors.ink2,
+              color:
+                backend === "offline"
+                  ? colors.warning
+                  : backend === "online" && spaceCode
+                    ? colors.success
+                    : colors.ink2,
               fontFamily: "monospace",
               textTransform: "uppercase",
               letterSpacing: 1,
@@ -152,7 +175,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               overflow: "hidden",
             }}
           >
-            Offline
+            {backend === "checking"
+              ? "Sync…"
+              : backend === "offline"
+                ? "Offline"
+                : spaceCode
+                  ? `Synced · ${spaceCode}`
+                  : "Cloud Ready"}
           </Text>
         </View>
 
