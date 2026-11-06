@@ -238,34 +238,67 @@ export const SwipeableMatchItem: React.FC<SwipeableMatchItemProps> = ({
           backgroundColor: colors.surfaceCard,
         }}
       >
-        {/* Left Action (web: right swipe): Resume */}
-        <Pressable
-          onPress={() => onResumeMatch(match.id)}
-          style={({ pressed }) => ({
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 6,
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 8,
-            backgroundColor: colors.accent,
-            opacity: pressed ? 0.9 : 1,
-            transform: [{ scale: pressed ? 0.95 : 1 }],
-            ...actionShadow,
-          })}
-        >
-          <Play size={16} color="#FFFFFF" fill="#FFFFFF" />
-          <Text
-            style={{
-              fontSize: 12,
-              color: "#FFFFFF",
-              fontFamily: FONTS.sans,
-              fontWeight: "600",
-            }}
+        {/* Left Action (web: right swipe): Resume — LIVE matches only.
+            Completed matches previously showed a working "Resume" that
+            reopened the scorer with an active pad (result corruption);
+            finished matches get "View" instead, which opens the scorecard. */}
+        {match.status === "live" ? (
+          <Pressable
+            onPress={() => onResumeMatch(match.id)}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 8,
+              backgroundColor: colors.accent,
+              opacity: pressed ? 0.9 : 1,
+              transform: [{ scale: pressed ? 0.95 : 1 }],
+              ...actionShadow,
+            })}
           >
-            Resume
-          </Text>
-        </Pressable>
+            <Play size={16} color="#FFFFFF" fill="#FFFFFF" />
+            <Text
+              style={{
+                fontSize: 12,
+                color: "#FFFFFF",
+                fontFamily: FONTS.sans,
+                fontWeight: "600",
+              }}
+            >
+              Resume
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={() => onOpenMatchDetail(match.id)}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 8,
+              backgroundColor: colors.accentSubtle,
+              opacity: pressed ? 0.9 : 1,
+              transform: [{ scale: pressed ? 0.95 : 1 }],
+              ...actionShadow,
+            })}
+          >
+            <Play size={16} color={colors.accent} fill={colors.accent} />
+            <Text
+              style={{
+                fontSize: 12,
+                color: colors.accent,
+                fontFamily: FONTS.sans,
+                fontWeight: "600",
+              }}
+            >
+              View Scorecard
+            </Text>
+          </Pressable>
+        )}
 
         {/* Right Action (web: left swipe): Archive / Restore */}
         <Pressable

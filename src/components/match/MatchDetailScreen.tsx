@@ -13,7 +13,7 @@
  *   "Copy for WhatsApp" button opens the share sheet with selectable text.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Pressable,
   SafeAreaView,
@@ -56,13 +56,34 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
 }) => {
   const { colors } = useTheme();
   const [match, setMatch] = useState<Match | undefined>(() => db.getMatch(matchId));
-  const [playersMap] = useState<Record<string, Player>>(() => db.getPlayersMap());
+  const [playersMap, setPlayersMap] = useState<Record<string, Player>>(() => db.getPlayersMap());
   const [activeTab, setActiveTab] = useState<"summary" | "scorecard" | "commentary" | "analysis">("summary");
   const [scorecardInningsIdx, setScorecardInningsIdx] = useState<number>(0);
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
   // RN: replaces the web canvas poster — sheet shows share text / match JSON.
   const [shareMode, setShareMode] = useState<ShareMode>("json");
   const [shareJson, setShareJson] = useState<string>("");
+
+  // Stale-snapshot fix: this screen used to capture the match ONCE on mount.
+  // Resuming scoring from detail (Scoring pushes ON TOP of this screen),
+  // scoring balls and coming Back kept showing the PRE-scoring score, and a
+  // match finished in the scorer still showed "Match in Progress" with a
+  // live "Resume Live" link (which reopened a completed match). Re-read on
+  // every data change, exactly like ScoringScreen and HomeScreen do.
+  // NOTE: if the row vanishes mid-view (deleted / cloud tombstone) we KEEP
+  // the last snapshot — switching match to undefined here would take the
+  // early-return path below and skip the hooks after it (React "rendered
+  // fewer hooks" crash → ErrorBoundary soft-lock).
+  useEffect(() => {
+    const unsub = db.subscribe(() => {
+      const m = db.getMatch(matchId);
+      if (m) {
+        setMatch(m);
+        setPlayersMap(db.getPlayersMap());
+      }
+    });
+    return unsub;
+  }, [matchId]);
 
   if (!match) {
     return (
@@ -85,7 +106,15 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
   // Compute scorecards for both innings
   const inningsScorecards = useMemo(() => {
     return match.innings.map((inn, idx) => {
-      const target = idx > 0 ? match.innings[0].ballEvents.reduce((acc, b) => acc + b.runsBat, 0) + 1 : undefined;
+      // Target = the STORED innings.targetRuns (set by the scorer when the
+      // 1st innings ended; includes extras). Recomputing from runsBat only
+      // understated it by the whole extras tally (wides/no-balls/byes...),
+      // marking chases complete before they actually were.
+      const target =
+        idx > 0
+          ? inn.targetRuns ??
+            (match.innings[0]?.ballEvents.reduce((acc, b) => acc + b.runsBat, 0) ?? 0) + 1
+          : undefined;
       return replayInnings(
         inn.ballEvents,
         match.rules,
@@ -174,7 +203,14 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
 
   const openShareSheet = (mode: ShareMode) => {
     if (mode === "json") {
-      setShareJson(db.exportMatchToJson(match.id));
+      // The match can be deleted (cloud tombstone) between mount and this
+      // tap — exportMatchToJson throws on a missing id and would hit the
+      // ErrorBoundary. Share the object we already hold instead.
+      try {
+        setShareJson(db.exportMatchToJson(match.id));
+      } catch {
+        setShareJson(JSON.stringify({ type: "gullyscore_single_match", match }, null, 2));
+      }
     }
     setShareMode(mode);
     setShowShareModal(true);

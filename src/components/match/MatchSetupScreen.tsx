@@ -12,7 +12,7 @@
  * - Web checkbox inputs → Pressable checkbox squares (Check icon).
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { Match, MatchRules, Player, Team } from "../../types/cricket";
 import { db, DEFAULT_RULES } from "../../storage/db";
@@ -208,7 +208,9 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   initialTournamentId,
 }) => {
   const { colors } = useTheme();
-  const teams = db.getTeams();
+  // Archived teams are not eligible for new matches (they stay selectable
+  // nowhere else either — keeps setup consistent with the Teams list).
+  const teams = db.getTeams().filter((t) => !t.isArchived);
   const players = db.getPlayers();
   const settings = db.getSettings();
 
@@ -232,6 +234,17 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   // Toss
   const [tossWinner, setTossWinner] = useState<string>(teamAId);
   const [tossDecision, setTossDecision] = useState<"bat" | "bowl">("bat");
+
+  // Toss winner must always be one of the two selected teams: changing a
+  // team chip used to leave tossWinner pointing at a team no longer in the
+  // match — both toss buttons then rendered inactive (no warning) and the
+  // created innings batted with a team that isn't even playing, silently
+  // corrupting the match record, squads and tournament points.
+  useEffect(() => {
+    if (tossWinner !== teamAId && tossWinner !== teamBId) {
+      setTossWinner(teamAId);
+    }
+  }, [teamAId, teamBId, tossWinner]);
 
   // Squad selection
   const [teamAPlayers, setTeamAPlayers] = useState<string[]>(() => {
@@ -287,6 +300,10 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   };
 
   const handleStartMatch = () => {
+    // Defensive clamp (same reasoning as the reconciliation effect above):
+    // a stale tossWinner must never reach the match record.
+    const tossWinnerId =
+      tossWinner === teamAId || tossWinner === teamBId ? tossWinner : teamAId;
     const rules: MatchRules = {
       overs,
       playersPerSide,
@@ -304,8 +321,8 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
     // Determine who bats first based on toss
     const firstBatTeamId =
       tossDecision === "bat"
-        ? tossWinner
-        : tossWinner === teamAId
+        ? tossWinnerId
+        : tossWinnerId === teamAId
         ? teamBId
         : teamAId;
     const firstBowlTeamId = firstBatTeamId === teamAId ? teamBId : teamAId;
@@ -321,7 +338,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
       venue,
       rules,
       toss: {
-        winnerTeamId: tossWinner,
+        winnerTeamId: tossWinnerId,
         decision: tossDecision,
       },
       status: "live",
@@ -824,10 +841,30 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
               size="lg"
               fullWidth
               onPress={handleStartMatch}
-              disabled={!teamAId || !teamBId || teamAId === teamBId}
+              disabled={
+                !teamAId ||
+                !teamBId ||
+                teamAId === teamBId ||
+                teamAPlayers.length === 0 ||
+                teamBPlayers.length === 0
+              }
             >
               Start Match & Open Live Scorer
             </GullyButton>
+            {(teamAPlayers.length === 0 || teamBPlayers.length === 0) &&
+              teamAId !== teamBId && (
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontFamily: FONTS.sans,
+                    color: colors.ink2,
+                    textAlign: "center",
+                    marginTop: 6,
+                  }}
+                >
+                  Both teams need at least 1 player in their squad — add players below or in the Teams tab.
+                </Text>
+              )}
           </View>
         </View>
       </ScrollView>

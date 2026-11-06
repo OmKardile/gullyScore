@@ -5,13 +5,14 @@
  * Tapping a fixture opens match setup pre-filled.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import { Fixture, MatchRules, Tournament } from "../../types/cricket";
 import { db, DEFAULT_RULES } from "../../storage/db";
 import {
   calculateTournamentPointsTable,
   generateRoundRobinFixtures,
+  replayInnings,
 } from "../../engine/scoringEngine";
 import {
   simulateTournamentOutcomes,
@@ -56,6 +57,18 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
   const [scenarioTargetId, setScenarioTargetId] = useState<string>("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
+  // Reconcile the NRR scenario picks with the selected tournament: switching
+  // tournaments used to keep team ids from the PREVIOUS tournament (the
+  // widget then showed foreign teams with no chip highlighted), and picking
+  // a "My Team" equal to the stored "Target Rival" produced a meaningless
+  // self-vs-self NRR equation.
+  useEffect(() => {
+    const teamIds = selectedTournament?.teamIds || [];
+    if (scenarioTeamId && !teamIds.includes(scenarioTeamId)) setScenarioTeamId("");
+    if (scenarioTargetId && !teamIds.includes(scenarioTargetId)) setScenarioTargetId("");
+    if (scenarioTeamId && scenarioTargetId === scenarioTeamId) setScenarioTargetId("");
+  }, [selectedTournament, scenarioTeamId, scenarioTargetId]);
+
   // Create Tournament modal state
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [newTourneyName, setNewTourneyName] = useState<string>("");
@@ -64,7 +77,17 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
 
   const teams = db.getTeams();
   const matches = db.getMatches();
-  const fixtures = db.getFixtures(selectedTournament?.id);
+  // Memoize the filtered fixture list: the raw filter returned a NEW array
+  // every render, so the simulation useMemo (800-iteration Monte Carlo) below
+  // re-ran on every keystroke/scroll.
+  const allFixtures = db.getFixtures();
+  const fixtures = useMemo(
+    () =>
+      selectedTournament
+        ? allFixtures.filter((f) => f.tournamentId === selectedTournament.id)
+        : allFixtures,
+    [allFixtures, selectedTournament]
+  );
 
   const refreshTournaments = () => {
     const list = db.getTournaments();
@@ -142,6 +165,38 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
       pointsTable
     );
   }, [selectedTournament, fixtures, matches, pointsTable]);
+
+  // Tournament Top Performers: real aggregates from THIS tournament's
+  // completed matches. The old list rendered the first 5 players in the
+  // entire database (insertion order, no stats) under this heading.
+  const tournamentTopPerformers = useMemo(() => {
+    if (!selectedTournament) return [];
+    const tournMatches = matches.filter(
+      (m) => m.tournamentId === selectedTournament.id && m.status === "completed"
+    );
+    const playersMap = db.getPlayersMap();
+    const agg: Record<string, { runs: number; wickets: number }> = {};
+    for (const m of tournMatches) {
+      m.innings.forEach((inn) => {
+        const battingSquad =
+          inn.battingTeamId === m.teamAId ? m.teamAPlayerIds : m.teamBPlayerIds;
+        const sc = replayInnings(inn.ballEvents, m.rules, battingSquad, [], playersMap);
+        sc.batters.forEach((b) => {
+          if (!agg[b.playerId]) agg[b.playerId] = { runs: 0, wickets: 0 };
+          agg[b.playerId].runs += b.runs;
+        });
+        sc.bowlers.forEach((b) => {
+          if (!agg[b.playerId]) agg[b.playerId] = { runs: 0, wickets: 0 };
+          agg[b.playerId].wickets += b.wickets;
+        });
+      });
+    }
+    return Object.entries(agg)
+      .map(([id, a]) => ({ player: playersMap[id], runs: a.runs, wickets: a.wickets }))
+      .filter((r) => !!r.player)
+      .sort((x, y) => y.runs + y.wickets * 20 - (x.runs + x.wickets * 20))
+      .slice(0, 5);
+  }, [matches, selectedTournament]);
 
   // NRR Scenario Solver
   const nrrScenario = useMemo(() => {
@@ -806,44 +861,58 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
                   completed.
                 </Text>
                 <View style={{ flexDirection: "column" }}>
-                  {db.getPlayers().slice(0, 5).map((p, i, arr) => (
-                    <Pressable
-                      key={p.id}
-                      onPress={() => setSelectedPlayerId(p.id)}
-                      style={({ pressed }) => ({
+                  {tournamentTopPerformers.length === 0 ? (
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: colors.ink2,
+                        fontFamily: FONTS.sans,
                         paddingVertical: 8,
-                        paddingHorizontal: 8,
-                        borderRadius: 6,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        borderBottomWidth: i < arr.length - 1 ? 1 : 0,
-                        borderBottomColor: colors.hairline,
-                        opacity: pressed ? 0.9 : 1,
-                      })}
+                      }}
                     >
-                      <Text
-                        style={{
-                          fontWeight: "500",
-                          fontSize: 12,
-                          color: colors.ink,
-                          fontFamily: FONTS.sans,
-                        }}
+                      No completed matches in this tournament yet — top
+                      performers appear as results come in.
+                    </Text>
+                  ) : (
+                    tournamentTopPerformers.map((r, i, arr) => (
+                      <Pressable
+                        key={r.player.id}
+                        onPress={() => setSelectedPlayerId(r.player.id)}
+                        style={({ pressed }) => ({
+                          paddingVertical: 8,
+                          paddingHorizontal: 8,
+                          borderRadius: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          borderBottomWidth: i < arr.length - 1 ? 1 : 0,
+                          borderBottomColor: colors.hairline,
+                          opacity: pressed ? 0.9 : 1,
+                        })}
                       >
-                        {i + 1}. {p.name}
-                      </Text>
-                      <Text
-                        style={{
-                          fontSize: 12,
-                          color: colors.ink2,
-                          fontVariant: ["tabular-nums"],
-                          fontFamily: FONTS.sans,
-                        }}
-                      >
-                        {p.role.replace("_", " ")}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={{
+                            fontWeight: "500",
+                            fontSize: 12,
+                            color: colors.ink,
+                            fontFamily: FONTS.sans,
+                          }}
+                        >
+                          {i + 1}. {r.player.name}
+                        </Text>
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            color: colors.ink2,
+                            fontVariant: ["tabular-nums"],
+                            fontFamily: FONTS.sans,
+                          }}
+                        >
+                          {r.runs} runs · {r.wickets} wkts
+                        </Text>
+                      </Pressable>
+                    ))
+                  )}
                 </View>
               </View>
             )}

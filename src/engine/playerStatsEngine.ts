@@ -275,7 +275,15 @@ export function calculatePlayerDetailedStats(
 
     // Replay innings to get exact scorecard
     const scorecards: InningsScorecard[] = m.innings.map((inn, idx) => {
-      const target = idx > 0 && m.innings[0] ? m.innings[0].ballEvents.reduce((acc, b) => acc + b.runsBat, 0) + 1 : undefined;
+      // Stored target (set by the scorer, extras included) with a
+      // runsBat-only fallback: runsBat excludes wides/no-balls/byes, so the
+      // old fallback understated the target and could mark a chase complete
+      // before it actually was.
+      const target =
+        idx > 0
+          ? inn.targetRuns ??
+            (m.innings[0] ? m.innings[0].ballEvents.reduce((acc, b) => acc + b.runsBat, 0) + 1 : undefined)
+          : undefined;
       return replayInnings(
         inn.ballEvents,
         m.rules,

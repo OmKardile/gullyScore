@@ -211,7 +211,10 @@ export function calculateLiveWinProbability(
   const crr = ballsBowled > 0 ? currentScorecard.totalRuns / (ballsBowled / 6) : 7.0;
 
   // Wicket impact factor: each wicket in hand adds exponential chasing confidence
-  const wicketFactor = Math.pow(wicketsInHand / totalWickets, 0.85);
+  // (guarded like the 1st-innings branch above: playersPerSide === 1 without
+  // lastManBatting gives totalWickets = 0 — unguarded this became NaN% in the UI)
+  const wicketFactor =
+    totalWickets > 0 ? Math.pow(wicketsInHand / totalWickets, 0.85) : 0.5;
 
   // Balls per run required
   const runsPerBall = runsRemaining / ballsRemaining;
@@ -405,8 +408,11 @@ export function calculatePreMatchPrediction(
   const venueMatches = completedMatches.filter((m) => !venue || m.venue === venue);
   venueMatches.forEach((m) => {
     if (m.innings && m.innings.length >= 2 && m.winnerTeamId) {
+      // Copy-paste bug: the else branch incremented batFirstWins too, so
+      // bowlFirstWins stayed 0 forever and any venue with ≥3 decided games
+      // was reported as "bat first wins ~100%".
       if (m.winnerTeamId === m.innings[0].battingTeamId) batFirstWins++;
-      else batFirstWins++;
+      else bowlFirstWins++;
     }
   });
 

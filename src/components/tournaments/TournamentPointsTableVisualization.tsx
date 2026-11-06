@@ -328,12 +328,10 @@ export const TournamentPointsTableVisualization: React.FC<
       const remainingFixturesCount = pendingFixtures.length;
       const maxPoints = st.points + remainingFixturesCount * tournament.winPoints;
 
-      const oversFacedFormatted = `${Math.floor(st.oversFacedFraction)}.${Math.round(
-        (st.oversFacedFraction % 1) * 6
-      )}`;
-      const oversBowledFormatted = `${Math.floor(st.oversBowledFraction)}.${Math.round(
-        (st.oversBowledFraction % 1) * 6
-      )}`;
+      const oversFacedBalls = Math.round(st.oversFacedFraction * 6);
+      const oversFacedFormatted = `${Math.floor(oversFacedBalls / 6)}.${oversFacedBalls % 6}`;
+      const oversBowledBalls = Math.round(st.oversBowledFraction * 6);
+      const oversBowledFormatted = `${Math.floor(oversBowledBalls / 6)}.${oversBowledBalls % 6}`;
 
       return {
         rank: 1,
@@ -355,7 +353,7 @@ export const TournamentPointsTableVisualization: React.FC<
         oversBowledFormatted,
         teamRunRate: Number(teamRunRate.toFixed(2)),
         opponentRunRate: Number(opponentRunRate.toFixed(2)),
-        form: st.form.slice(-5), // Last 5 matches
+        form: st.form.slice(0, 5).reverse(), // 5 most recent, oldest→newest
         remainingFixturesCount,
         maxPoints,
         isQualified: false,
@@ -444,7 +442,15 @@ export const TournamentPointsTableVisualization: React.FC<
     const maxPts = chartData.reduce((m, d) => Math.max(m, d.points), 0);
     return niceLeftTicks(maxPts);
   }, [chartData]);
-  const rightTicks = [-4, -2, 0, 2, 4];
+  // NRR right axis: data-derived symmetric domain. The old hard-coded
+  // [-4, 4] silently clipped any |NRR| > 4 — common in gully cricket (bowl a
+  // side out for 10 in 8 overs and your NRR is +8.75) — so those teams' dots
+  // vanished from the chart while the table showed them.
+  const rightTicks = useMemo(() => {
+    const maxAbs = chartData.reduce((m, d) => Math.max(m, Math.abs(d.nrr)), 0);
+    const bound = Math.max(2, Math.ceil(maxAbs * 2) / 2);
+    return [-bound, -bound / 2, 0, bound / 2, bound].map((v) => Number(v.toFixed(2)));
+  }, [chartData]);
   const tooltipDatum =
     selectedChartIndex !== null && chartData[selectedChartIndex]
       ? chartData[selectedChartIndex]
@@ -1690,8 +1696,9 @@ export const TournamentPointsTableVisualization: React.FC<
               const barW = Math.min(32, slotW * 0.55);
               const yLeft = (v: number) =>
                 PLOT_TOP + plotH * (1 - v / leftMax);
+              const rightBound = rightTicks[rightTicks.length - 1] || 2;
               const yRight = (v: number) =>
-                PLOT_TOP + plotH * ((4 - v) / 8);
+                PLOT_TOP + plotH * ((rightBound - v) / (2 * rightBound));
               const xCenter = (i: number) => PLOT_LEFT + slotW * i + slotW / 2;
 
               return (
@@ -1801,7 +1808,7 @@ export const TournamentPointsTableVisualization: React.FC<
                       </SvgText>
                     ))}
 
-                    {/* YAxis (right): NRR ticks, domain [-4, 4] */}
+                    {/* YAxis (right): NRR ticks, data-derived symmetric domain */}
                     {rightTicks.map((t) => (
                       <SvgText
                         key={`y-right-${t}`}

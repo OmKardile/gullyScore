@@ -222,21 +222,26 @@ export function replayInnings(
       bowler.noBalls++;
       // Batter faced a ball on no ball
       striker.ballsFaced++;
-      partP1Balls++;
+      // Credit the ball to whichever partner is on strike (the old code
+      // always credited player 1, so player2Balls was permanently 0).
+      if (ball.strikerId === partP1Id) partP1Balls++;
+      else partP2Balls++;
     } else if (ball.extraType === "bye") {
       const byeRuns = ball.extraRuns;
       extras.byes += byeRuns;
       extras.total += byeRuns;
       runsThisBall += byeRuns;
       striker.ballsFaced++;
-      partP1Balls++;
+      if (ball.strikerId === partP1Id) partP1Balls++;
+      else partP2Balls++;
     } else if (ball.extraType === "leg_bye") {
       const lbRuns = ball.extraRuns;
       extras.legByes += lbRuns;
       extras.total += lbRuns;
       runsThisBall += lbRuns;
       striker.ballsFaced++;
-      partP1Balls++;
+      if (ball.strikerId === partP1Id) partP1Balls++;
+      else partP2Balls++;
     } else if (ball.extraType === "penalty") {
       extras.penalties += ball.extraRuns;
       extras.total += ball.extraRuns;
@@ -244,7 +249,8 @@ export function replayInnings(
     } else {
       // Normal legal delivery
       striker.ballsFaced++;
-      partP1Balls++;
+      if (ball.strikerId === partP1Id) partP1Balls++;
+      else partP2Balls++;
       if (ball.runsBat === 0) {
         bowler.dots++;
       }
@@ -542,6 +548,9 @@ export function calculateTournamentPointsTable(
     status: string;
     winnerTeamId?: string;
     resultText?: string;
+    teamAId?: string;
+    teamAPlayerIds?: string[];
+    teamBPlayerIds?: string[];
     innings: Array<{
       battingTeamId: string;
       bowlingTeamId: string;
@@ -579,8 +588,22 @@ export function calculateTournamentPointsTable(
 
     const inn1 = match.innings[0];
     const inn2 = match.innings[1];
-    const sc1 = replayInnings(inn1.ballEvents, match.rules, [], [], playersMap);
-    const sc2 = replayInnings(inn2.ballEvents, match.rules, [], [], playersMap, sc1.totalRuns + 1);
+    // Real batting squads (NOT empty): replayInnings only marks an innings
+    // "all_out" when a squad is present (battingSquadIds.length > 1 guard), so
+    // the ICC full-quota NRR rule below never fired here before — a team
+    // bowled out in 8 of 20 overs was credited 8 overs faced, inflating its
+    // runs-for rate (60 all out → 7.50 RPO instead of 3.00) and corrupting
+    // standings/tie-breaks/simulation boosts.
+    const inn1Squad =
+      inn1.battingTeamId === match.teamAId
+        ? match.teamAPlayerIds
+        : match.teamBPlayerIds;
+    const inn2Squad =
+      inn2.battingTeamId === match.teamAId
+        ? match.teamAPlayerIds
+        : match.teamBPlayerIds;
+    const sc1 = replayInnings(inn1.ballEvents, match.rules, inn1Squad || [], [], playersMap);
+    const sc2 = replayInnings(inn2.ballEvents, match.rules, inn2Squad || [], [], playersMap, sc1.totalRuns + 1);
 
     const team1 = inn1.battingTeamId;
     const team2 = inn2.battingTeamId;

@@ -82,6 +82,10 @@ export const StatsScreen: React.FC = () => {
 
     matches.forEach((m) => {
       if (m.status !== "completed") return;
+      // Guard against malformed rows (e.g. a hand-edited or truncated backup
+      // imported before validation existed): a match without innings[] used
+      // to throw here and crash the whole Stats tab on every launch.
+      if (!Array.isArray(m.innings)) return;
 
       const scList = m.innings.map((inn) =>
         replayInnings(inn.ballEvents, m.rules, [], [], playersMap)

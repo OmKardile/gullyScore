@@ -281,7 +281,7 @@ export const ProjectedScoreStrip: React.FC<{
             fontVariant: ["tabular-nums"],
           }}
         >
-          Par: {model.parScore} · CRR: {model.atCurrentRate}
+          Par: {model.parScore} · Proj: {model.atCurrentRate}
         </Text>
         <Text
           style={{

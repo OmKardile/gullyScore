@@ -269,13 +269,19 @@ function applyPulledRow(row: PulledRow, remoteToLocal: Map<string, string>): boo
   if (!["player", "team", "match", "tournament", "fixture", "prediction"].includes(kind)) {
     return false; // unknown future kind — ignore, never corrupt local data
   }
-  // Map remote key -> local id, remap all interior refs to local ids.
-  const localId = localIdForRemoteKey(row.id, kind === "prediction" ? "match" : (kind as SyncKind));
-  const local = deepRemap(payload, remoteToLocal) as Record<string, unknown>;
-
+  // Prediction rows are not stored by the RN app (v1). Skip BEFORE the id
+  // mapping below: mapping them anyway polluted idMap with phantom entries
+  // (kind "match"), which later produced bogus match tombstones on push and
+  // a wrong-kind delete on a prediction tombstone pull.
   if (kind === "prediction") {
-    return false; // prediction rows are not stored by the RN app (v1)
+    if (payload.deleted === true && !state.tombstones.includes(row.id)) {
+      state.tombstones.push(row.id);
+    }
+    return false;
   }
+  // Map remote key -> local id, remap all interior refs to local ids.
+  const localId = localIdForRemoteKey(row.id, kind as SyncKind);
+  const local = deepRemap(payload, remoteToLocal) as Record<string, unknown>;
 
   local.id = localId;
 

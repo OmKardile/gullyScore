@@ -1,9 +1,28 @@
 # GullyScore — Web Deploy to Render
 
 Pre-built static web app (Expo / React Native Web export of the GullyScore RN
-app, v1.4.3) with everything needed to host it permanently on Render.
+app, v1.4.4) with everything needed to host it permanently on Render.
 
-**What's new in 1.4.3** — fixes the "scoring screen hangs up" report:
+**What's new in 1.4.4** — full-codebase bug-hunt release (all found bugs
+fixed, E2E expanded to 48 checks):
+
+- **Freeze-class**: every heavy screen (points table, Monte Carlo simulation,
+  career stats, profile) recomputed its full-league replays on every render/
+  keystroke because the storage layer returned fresh collections; the db now
+  serves stable cached collections invalidated per data change
+- **Data corruption**: editing player A then opening player B no longer
+  pre-fills B's editor with A's data; changing teams in match setup no longer
+  creates a match batting with a squad that isn't even playing; completed
+  matches can no longer be re-scored from a stale "Resume" button; the match
+detail screen refreshes live after scoring; importing a malformed backup
+  skips bad rows instead of crash-looping the app
+- **Correctness**: Home win predictor uses the real chase target (was 100/0),
+  NRR all-out counts the full overs quota (ICC rule), partnership ball
+  splits credit both batters, form guides show the 5 most recent results,
+  toss-venue stats no longer say "bat wins 100%", tournament leaderboard
+  lists actual top performers, NRR chart auto-scales beyond ±4
+
+**What was fixed in 1.4.3** — the "scoring screen hangs up" report:
 rapid taps on the scoring pad are recorded 1:1 (previously React's async
 state commits made a fast tapper overwrite their own balls — the pad looked
 deaf), and the over-end bowler sheet can never again be hidden behind the
@@ -44,7 +63,7 @@ git push -u origin main
 
 (The folder already contains a git history with one commit, so no `git init`
 or `git add` is needed. If you kept the .git folder out, run
-`git init -b main && git add -A && git commit -m "GullyScore 1.4.3"` first.)
+`git init -b main && git add -A && git commit -m "GullyScore 1.4.4"` first.)
 
 ### 2. Deploy on Render
 
@@ -78,7 +97,7 @@ Each browser keeps its own local data until you join a space.
 
 The repo ships a pre-built `dist/`, so the usual flow is:
 
-**Already deployed (recommended for this 1.4.3 update):**
+**Already deployed (recommended for this 1.4.4 update):**
 
 1. Download & unzip `GullyScore-Render-Deploy.zip`.
 2. Copy its `gullyscore-web/*` over your local clone of the deployed repo
@@ -86,7 +105,7 @@ The repo ships a pre-built `dist/`, so the usual flow is:
 3. Commit + push — Render auto-deploys on push:
 
 ```bash
-git add -A && git commit -m "GullyScore 1.4.3 — scoring-pad rapid-tap + stacked-overlay fixes"
+git add -A && git commit -m "GullyScore 1.4.4 — full-codebase bug-hunt: perf freeze, data corruption, NRR/prediction correctness"
 git push
 ```
 

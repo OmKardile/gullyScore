@@ -5,7 +5,7 @@
  * Provides deep batting, bowling, fielding, game logs, and statistical trajectory.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Linking,
   Pressable,
@@ -192,7 +192,22 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
   const [editRole, setEditRole] = useState<any>("all_rounder");
   const [editBatHand, setEditBatHand] = useState<any>("right");
   const [editBowlStyle, setEditBowlStyle] = useState<any>("rm");
-  const [editTeamId, setEditTeamId] = useState<string>("");
+  // Multi-select: a player can be in several teams' rosters. The old
+  // single editTeamId seeded with only the FIRST team silently removed the
+  // player from every other team on save.
+  const [editTeamIds, setEditTeamIds] = useState<string[]>([]);
+
+  // Reset any half-finished edit form when a DIFFERENT player is opened:
+  // this modal stays mounted (returns null) when closed, so edit state used
+  // to survive the switch — opening player B after editing player A
+  // pre-filled A's name/role/team into B's editor, and "Save Changes"
+  // silently wrote A's data onto B (and moved B into A's team).
+  useEffect(() => {
+    setIsEditing(false);
+    setEditName("");
+    setEditNickname("");
+    setEditTeamIds([]);
+  }, [playerId]);
 
   const allMatches = db.getMatches();
   const allTeams = db.getTeams();
@@ -215,7 +230,8 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
     setEditRole(player.role);
     setEditBatHand(player.battingHand);
     setEditBowlStyle(player.bowlingStyle);
-    setEditTeamId(teams[0]?.id || "");
+    // Seed with ALL current teams — saving untouched keeps memberships intact.
+    setEditTeamIds(teams.map((t) => t.id));
     setIsEditing(true);
   };
 
@@ -231,19 +247,22 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
     };
     db.savePlayer(updated);
 
-    // Update team roster association if changed
-    if (editTeamId) {
-      allTeams.forEach((t) => {
-        const has = t.playerIds.includes(player.id);
-        if (t.id === editTeamId && !has) {
-          t.playerIds.push(player.id);
-          db.saveTeam(t);
-        } else if (t.id !== editTeamId && has) {
-          t.playerIds = t.playerIds.filter((id) => id !== player.id);
-          db.saveTeam(t);
-        }
-      });
-    }
+    // Set team memberships to EXACTLY the selected teams. Previously this
+    // block kept only the single editTeamId — a multi-team player lost
+    // every other membership on save — and "no team" skipped the block
+    // entirely (a silent no-op). An empty selection now removes the player
+    // from all rosters, which the chip labels make explicit.
+    allTeams.forEach((t) => {
+      const has = t.playerIds.includes(player.id);
+      const wants = editTeamIds.includes(t.id);
+      if (wants && !has) {
+        t.playerIds.push(player.id);
+        db.saveTeam(t);
+      } else if (!wants && has) {
+        t.playerIds = t.playerIds.filter((id) => id !== player.id);
+        db.saveTeam(t);
+      }
+    });
 
     setIsEditing(false);
     onPlayerUpdated?.();
@@ -829,7 +848,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   marginBottom: 4,
                 }}
               >
-                Assign to Team
+                Assign to Team (multi-select)
               </Text>
               <View
                 style={{
@@ -839,16 +858,22 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 }}
               >
                 <GullyChip
-                  label="No primary team"
-                  active={editTeamId === ""}
-                  onPress={() => setEditTeamId("")}
+                  label="No team"
+                  active={editTeamIds.length === 0}
+                  onPress={() => setEditTeamIds([])}
                 />
                 {allTeams.map((t) => (
                   <GullyChip
                     key={t.id}
                     label={`${t.name} (${t.shortName})`}
-                    active={editTeamId === t.id}
-                    onPress={() => setEditTeamId(t.id)}
+                    active={editTeamIds.includes(t.id)}
+                    onPress={() =>
+                      setEditTeamIds((prev) =>
+                        prev.includes(t.id)
+                          ? prev.filter((id) => id !== t.id)
+                          : [...prev, t.id]
+                      )
+                    }
                   />
                 ))}
               </View>
@@ -1194,7 +1219,14 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   const m = stats.matchLogs[0];
                   return (
                     <Pressable
-                      onPress={() => onOpenMatchDetail?.(m.matchId)}
+                      onPress={() => {
+                      // Close THIS floating modal first: RN Modal z-order is
+                      // mount order, so navigating while open left the profile
+                      // sheet covering the pushed MatchDetail screen (the
+                      // "stacked overlay" hang family — escapable but confusing).
+                      onClose();
+                      onOpenMatchDetail?.(m.matchId);
+                    }}
                       style={({ pressed }) => [
                         {
                           padding: 10,
@@ -1734,7 +1766,14 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 {stats.matchLogs.map((m) => (
                   <Pressable
                     key={m.matchId}
-                    onPress={() => onOpenMatchDetail?.(m.matchId)}
+                    onPress={() => {
+                      // Close THIS floating modal first: RN Modal z-order is
+                      // mount order, so navigating while open left the profile
+                      // sheet covering the pushed MatchDetail screen (the
+                      // "stacked overlay" hang family — escapable but confusing).
+                      onClose();
+                      onOpenMatchDetail?.(m.matchId);
+                    }}
                     style={({ pressed }) => [
                       {
                         padding: 12,

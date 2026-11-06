@@ -342,10 +342,35 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               {(() => {
                 const curInn = activeMatch.innings[activeMatch.currentInningsIndex];
                 const sc = curInn
-                  ? replayInnings(curInn.ballEvents, activeMatch.rules, [], [], db.getPlayersMap())
+                  ? replayInnings(
+                      curInn.ballEvents,
+                      activeMatch.rules,
+                      [],
+                      [],
+                      db.getPlayersMap(),
+                      curInn.targetRuns,
+                      curInn.isSuperOver
+                    )
                   : null;
                 if (!sc) return null;
-                const prob = calculateLiveWinProbability(activeMatch, sc);
+                // The chase target used to be omitted here, so the model fell
+                // back to "target 1" and any 2nd-innings chase instantly read
+                // as "Target reached" (100% / 0%). Pass the stored target and
+                // the 1st-innings total (incl. extras), like ScoringScreen does.
+                const firstInningsTotal = activeMatch.innings[0]
+                  ? activeMatch.innings[0].ballEvents.reduce(
+                      (acc, b) =>
+                        acc +
+                        b.runsBat +
+                        (b.extraType === "wide" || b.extraType === "no_ball"
+                          ? b.extraRuns || 1
+                          : b.extraType !== "none"
+                          ? b.extraRuns
+                          : 0),
+                      0
+                    )
+                  : undefined;
+                const prob = calculateLiveWinProbability(activeMatch, sc, firstInningsTotal);
                 const tA = db.getTeam(activeMatch.teamAId);
                 const tB = db.getTeam(activeMatch.teamBId);
                 return (
@@ -542,7 +567,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               </View>
             </View>
 
-            {/* Swipe-to-action gesture hint */}
+            {/* Actions hint — RN port has explicit Resume / Archive buttons on
+                every match card (the web swipe gestures were replaced), so the
+                old "swipe right/left" hint described an interaction that does
+                not exist here. */}
             <View
               style={{
                 flexDirection: "row",
@@ -574,7 +602,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     fontFamily: FONTS.sans,
                   }}
                 >
-                  Swipe right to resume
+                  Tap a match to view its scorecard
                 </Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -585,7 +613,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     fontFamily: FONTS.sans,
                   }}
                 >
-                  Swipe left to archive
+                  Use the buttons to resume or archive
                 </Text>
                 <Text
                   style={{
@@ -634,7 +662,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   }}
                 >
                   {matchFilter === "archived"
-                    ? "Swipe left on any active match to archive it."
+                    ? "Archived matches can be restored with the Restore button."
                     : "Tap 'New Match' below to score your first gully cricket match."}
                 </Text>
               </View>
@@ -695,7 +723,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                             fontFamily: FONTS.sans,
                           }}
                         >
-                          {tA?.name} vs {tB?.name}
+                          {tA?.name || "Team removed"} vs {tB?.name || "Team removed"}
                         </Text>
                         <Text
                           style={{
@@ -705,7 +733,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                             marginTop: 2,
                           }}
                         >
-                          {f.roundName} · {f.scheduledDate}
+                          {[f.roundName, f.scheduledDate].filter(Boolean).join(" · ")}
                         </Text>
                       </View>
                       <Text

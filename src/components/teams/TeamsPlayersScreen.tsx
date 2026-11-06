@@ -13,7 +13,7 @@
  * - The squad list's `max-h-60 overflow-y-auto` → fixed-height nested ScrollView.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Pressable,
   SafeAreaView,
@@ -38,7 +38,7 @@ import {
   GullyChip,
 } from "../common/Components";
 import { Search } from "lucide-react-native";
-import { replayInnings } from "../../engine/scoringEngine";
+
 import { PlayerProfileModal } from "../players/PlayerProfileModal";
 import { useTheme, FONTS } from "../../design/theme";
 
@@ -92,6 +92,14 @@ export const TeamsPlayersScreen: React.FC = () => {
     setTeams(db.getTeams());
     setPlayers(db.getPlayers());
   };
+
+  // Stay live like the other tabs: a cloud-sync pull (or an edit made in the
+  // profile modal, which saves through db) used to leave this screen's
+  // rosters stale until the tab was re-entered (no db.subscribe here).
+  useEffect(() => {
+    const unsub = db.subscribe(refreshData);
+    return unsub;
+  }, []);
 
   const handleCreateTeam = () => {
     if (!newTeamName.trim()) return;
@@ -156,112 +164,6 @@ export const TeamsPlayersScreen: React.FC = () => {
           : true
       );
   }, [players, searchQuery]);
-
-  // Compute career stats for selected player
-  const playerCareerStats = useMemo(() => {
-    if (!selectedPlayer) return null;
-    const matches = db.getMatches();
-    const playersMap = db.getPlayersMap();
-
-    let matchesCount = 0;
-    let inningsCount = 0;
-    let runs = 0;
-    let ballsFaced = 0;
-    let fours = 0;
-    let sixes = 0;
-    let highestScore = 0;
-    let notOuts = 0;
-    let ducks = 0;
-    let thirties = 0;
-    let fifties = 0;
-    let hundreds = 0;
-
-    // Bowling
-    let legalBallsBowled = 0;
-    let runsConceded = 0;
-    let wickets = 0;
-    let maidens = 0;
-
-    // Fielding
-    let catches = 0;
-    let stumpings = 0;
-    let runOuts = 0;
-
-    matches.forEach((m) => {
-      const wasInTeamA = m.teamAPlayerIds.includes(selectedPlayer.id);
-      const wasInTeamB = m.teamBPlayerIds.includes(selectedPlayer.id);
-      if (!wasInTeamA && !wasInTeamB) return;
-
-      matchesCount++;
-
-      m.innings.forEach((inn) => {
-        const sc = replayInnings(inn.ballEvents, m.rules, [], [], playersMap);
-        const bStat = sc.batters.find((b) => b.playerId === selectedPlayer.id);
-        if (bStat) {
-          inningsCount++;
-          runs += bStat.runs;
-          ballsFaced += bStat.ballsFaced;
-          fours += bStat.fours;
-          sixes += bStat.sixes;
-          if (bStat.runs > highestScore) highestScore = bStat.runs;
-          if (!bStat.isOut) notOuts++;
-          if (bStat.isOut && bStat.runs === 0) ducks++;
-          if (bStat.runs >= 100) hundreds++;
-          else if (bStat.runs >= 50) fifties++;
-          else if (bStat.runs >= 30) thirties++;
-        }
-
-        const bwStat = sc.bowlers.find((bw) => bw.playerId === selectedPlayer.id);
-        if (bwStat) {
-          legalBallsBowled += bwStat.legalBalls;
-          runsConceded += bwStat.runsConceded;
-          wickets += bwStat.wickets;
-          maidens += bwStat.maidens;
-        }
-
-        // Fielding dismissals
-        sc.batters.forEach((b) => {
-          if (b.isOut && b.fielderIds?.includes(selectedPlayer.id)) {
-            if (b.wicketType === "run_out") runOuts++;
-            else if (b.wicketType === "stumped") stumpings++;
-            else catches++;
-          }
-        });
-      });
-    });
-
-    const outs = inningsCount - notOuts;
-    const battingAvg = outs > 0 ? Number((runs / outs).toFixed(1)) : runs;
-    const strikeRate = ballsFaced > 0 ? Number(((runs / ballsFaced) * 100).toFixed(1)) : 0;
-    const oversBowled = (legalBallsBowled / 6).toFixed(1);
-    const bowlingEcon =
-      legalBallsBowled > 0 ? Number((runsConceded / (legalBallsBowled / 6)).toFixed(2)) : 0;
-
-    return {
-      matchesCount,
-      inningsCount,
-      runs,
-      ballsFaced,
-      highestScore,
-      battingAvg,
-      strikeRate,
-      fours,
-      sixes,
-      thirties,
-      fifties,
-      hundreds,
-      notOuts,
-      ducks,
-      oversBowled,
-      runsConceded,
-      wickets,
-      maidens,
-      bowlingEcon,
-      catches,
-      stumpings,
-      runOuts,
-    };
-  }, [selectedPlayer]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -664,7 +566,11 @@ export const TeamsPlayersScreen: React.FC = () => {
                 active={newPlayerTeamId === ""}
                 onPress={() => setNewPlayerTeamId("")}
               />
-              {teams.map((t) => (
+              {/* Archived teams are roster-managed from the Teams list —
+                  don't offer them for new player assignments. */}
+              {teams
+                .filter((t) => !t.isArchived)
+                .map((t) => (
                 <GullyChip
                   key={t.id}
                   label={t.name}

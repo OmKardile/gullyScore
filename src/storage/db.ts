@@ -69,6 +69,26 @@ class GullyDb {
   private ready = false;
   private readyPromise: Promise<void> | null = null;
 
+  // ─── Stable derived collections (perf/hang fix) ─────────────────────────
+  // getMatches()/getPlayersMap()/etc. used to build a NEW array/object on
+  // every call, so every screen that memoized on [matches, playersMap, ...]
+  // re-ran its heavy computation (full-league innings replays, 800-iteration
+  // Monte Carlo, career stats) on EVERY render — typing one character in a
+  // text field re-replayed the entire match history. That is the same
+  // "screen freezes" family as the reported scoring-pad hang, and it grows
+  // with data. Fix: return cached references, invalidated together in
+  // notify() (bumped once per data change; cloud sync batches via
+  // notifyDataChanged). No caller mutates these collections in place
+  // (verified), and objects inside remain live references as before.
+  private revision = 0;
+  private playersCache: Player[] | null = null;
+  private teamsCache: Team[] | null = null;
+  private matchesCache: Match[] | null = null;
+  private tournamentsCache: Tournament[] | null = null;
+  private fixturesCache: Fixture[] | null = null;
+  private playersMapCache: Record<string, Player> | null = null;
+  private teamsMapCache: Record<string, Team> | null = null;
+
   constructor() {
     // Do NOT touch AsyncStorage here (native module may not be ready at
     // module-evaluation time on cold start). App must call `await db.init()`.
@@ -123,7 +143,20 @@ class GullyDb {
     };
   }
 
+  /** Monotonic data-change counter — stable useMemo dep for heavy screens. */
+  public getRevision(): number {
+    return this.revision;
+  }
+
   private notify() {
+    this.revision++;
+    this.playersCache = null;
+    this.teamsCache = null;
+    this.matchesCache = null;
+    this.tournamentsCache = null;
+    this.fixturesCache = null;
+    this.playersMapCache = null;
+    this.teamsMapCache = null;
     this.listeners.forEach((l) => l());
   }
 
@@ -137,7 +170,8 @@ class GullyDb {
 
   // --- Players CRUD ---
   public getPlayers(): Player[] {
-    return Object.values(this.players);
+    if (!this.playersCache) this.playersCache = Object.values(this.players);
+    return this.playersCache;
   }
 
   public getPlayer(id: string): Player | undefined {
@@ -145,7 +179,8 @@ class GullyDb {
   }
 
   public getPlayersMap(): Record<string, Player> {
-    return { ...this.players };
+    if (!this.playersMapCache) this.playersMapCache = { ...this.players };
+    return this.playersMapCache;
   }
 
   public savePlayer(player: Player) {
@@ -211,7 +246,8 @@ class GullyDb {
 
   // --- Teams CRUD ---
   public getTeams(): Team[] {
-    return Object.values(this.teams);
+    if (!this.teamsCache) this.teamsCache = Object.values(this.teams);
+    return this.teamsCache;
   }
 
   public getTeam(id: string): Team | undefined {
@@ -219,7 +255,8 @@ class GullyDb {
   }
 
   public getTeamsMap(): Record<string, Team> {
-    return { ...this.teams };
+    if (!this.teamsMapCache) this.teamsMapCache = { ...this.teams };
+    return this.teamsMapCache;
   }
 
   public saveTeam(team: Team) {
@@ -230,10 +267,20 @@ class GullyDb {
   }
 
   public deleteOrArchiveTeam(id: string): boolean {
+    // A team referenced by ANYWHERE (a played match, a tournament roster or a
+    // pending fixture) is ARCHIVED, never hard-deleted: hard-deleting orphans
+    // Tournament.teamIds / Fixture.teamAId-teamBId (broken " vs " rows, teams
+    // missing from points tables) with no tombstone for cloud sync to clean.
     const hasHistory = Object.values(this.matches).some(
       (m) => m.teamAId === id || m.teamBId === id
     );
-    if (hasHistory) {
+    const inTournament = Object.values(this.tournaments).some((t) =>
+      t.teamIds.includes(id)
+    );
+    const inFixture = Object.values(this.fixtures).some(
+      (f) => f.teamAId === id || f.teamBId === id
+    );
+    if (hasHistory || inTournament || inFixture) {
       if (this.teams[id]) {
         this.teams[id].isArchived = true;
         this.teams[id].updatedAt = Date.now();
@@ -251,7 +298,12 @@ class GullyDb {
 
   // --- Matches CRUD & Auto-Save ---
   public getMatches(): Match[] {
-    return Object.values(this.matches).sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!this.matchesCache) {
+      this.matchesCache = Object.values(this.matches).sort(
+        (a, b) => b.updatedAt - a.updatedAt
+      );
+    }
+    return this.matchesCache;
   }
 
   public getMatch(id: string): Match | undefined {
@@ -330,7 +382,12 @@ class GullyDb {
 
   // --- Tournaments CRUD ---
   public getTournaments(): Tournament[] {
-    return Object.values(this.tournaments).sort((a, b) => b.createdAt - a.createdAt);
+    if (!this.tournamentsCache) {
+      this.tournamentsCache = Object.values(this.tournaments).sort(
+        (a, b) => b.createdAt - a.createdAt
+      );
+    }
+    return this.tournamentsCache;
   }
 
   public getTournament(id: string): Tournament | undefined {
@@ -345,11 +402,13 @@ class GullyDb {
   }
 
   public getFixtures(tournamentId?: string): Fixture[] {
-    const list = Object.values(this.fixtures);
-    if (tournamentId) {
-      return list.filter((f) => f.tournamentId === tournamentId);
+    if (!tournamentId) {
+      if (!this.fixturesCache) this.fixturesCache = Object.values(this.fixtures);
+      return this.fixturesCache;
     }
-    return list;
+    return this.fixturesCache
+      ? this.fixturesCache.filter((f) => f.tournamentId === tournamentId)
+      : Object.values(this.fixtures).filter((f) => f.tournamentId === tournamentId);
   }
 
   public saveFixture(fixture: Fixture) {
@@ -429,6 +488,23 @@ class GullyDb {
   }
 
   // --- Backup & Restore (JSON) ---
+  /** Import validators: a malformed/truncated backup row must be SKIPPED,
+   *  never merged — a merged match without `innings: BallEvent[][]` makes
+   *  every screen that renders scorecards throw on every subsequent launch
+   *  (persistent crash loop, only fixable by clearing app data). */
+  private sanitizeImportedRecord<K extends string, V>(rows: unknown, isValid: (v: unknown, key: string) => boolean): { clean: Record<K, V>; skipped: number } {
+    const clean: Record<string, unknown> = {};
+    let skipped = 0;
+    if (!rows || typeof rows !== "object" || Array.isArray(rows)) {
+      return { clean: clean as Record<K, V>, skipped };
+    }
+    for (const [key, value] of Object.entries(rows as Record<string, unknown>)) {
+      if (isValid(value, key)) clean[key] = value;
+      else skipped++;
+    }
+    return { clean: clean as Record<K, V>, skipped };
+  }
+
   public exportAllToJson(): string {
     const payload = {
       schemaVersion: SCHEMA_VERSION,
@@ -448,16 +524,47 @@ class GullyDb {
   public importAllFromJson(jsonStr: string): { success: boolean; message: string } {
     try {
       const parsed = JSON.parse(jsonStr);
-      if (!parsed.players || !parsed.teams) {
+      if (!parsed.players || !parsed.teams || typeof parsed !== "object") {
         return { success: false, message: "Invalid backup file format." };
       }
 
-      this.players = { ...this.players, ...parsed.players };
-      this.teams = { ...this.teams, ...parsed.teams };
-      if (parsed.matches) this.matches = { ...this.matches, ...parsed.matches };
-      if (parsed.tournaments) this.tournaments = { ...this.tournaments, ...parsed.tournaments };
-      if (parsed.fixtures) this.fixtures = { ...this.fixtures, ...parsed.fixtures };
-      if (parsed.settings) this.settings = { ...this.settings, ...parsed.settings };
+      const players = this.sanitizeImportedRecord<string, Player>(parsed.players, (v, key) =>
+        !!v && typeof v === "object" && typeof key === "string" &&
+        typeof (v as Player).id === "string" && typeof (v as Player).name === "string"
+      );
+      const teams = this.sanitizeImportedRecord<string, Team>(parsed.teams, (v, key) =>
+        !!v && typeof v === "object" && typeof key === "string" &&
+        typeof (v as Team).id === "string" && typeof (v as Team).name === "string" &&
+        Array.isArray((v as Team).playerIds)
+      );
+      const matches = this.sanitizeImportedRecord<string, Match>(parsed.matches || {}, (v, key) =>
+        !!v && typeof v === "object" && typeof key === "string" &&
+        typeof (v as Match).id === "string" && Array.isArray((v as Match).innings) &&
+        (v as Match).innings.every(
+          (i) => !!i && typeof i === "object" && Array.isArray((i as { ballEvents?: unknown }).ballEvents)
+        )
+      );
+      const tournaments = this.sanitizeImportedRecord<string, Tournament>(parsed.tournaments || {}, (v, key) =>
+        !!v && typeof v === "object" && typeof key === "string" &&
+        typeof (v as Tournament).id === "string" && Array.isArray((v as Tournament).teamIds)
+      );
+      const fixtures = this.sanitizeImportedRecord<string, Fixture>(parsed.fixtures || {}, (v, key) =>
+        !!v && typeof v === "object" && typeof key === "string" &&
+        typeof (v as Fixture).id === "string" && typeof (v as Fixture).tournamentId === "string" &&
+        (v as Fixture).tournamentId.length > 0
+      );
+
+      const skippedTotal =
+        players.skipped + teams.skipped + matches.skipped + tournaments.skipped + fixtures.skipped;
+
+      this.players = { ...this.players, ...players.clean };
+      this.teams = { ...this.teams, ...teams.clean };
+      this.matches = { ...this.matches, ...matches.clean };
+      this.tournaments = { ...this.tournaments, ...tournaments.clean };
+      this.fixtures = { ...this.fixtures, ...fixtures.clean };
+      if (parsed.settings && typeof parsed.settings === "object") {
+        this.settings = { ...this.settings, ...parsed.settings };
+      }
 
       this.persist(STORAGE_KEY_PLAYERS, this.players);
       this.persist(STORAGE_KEY_TEAMS, this.teams);
@@ -467,7 +574,13 @@ class GullyDb {
       this.persist(STORAGE_KEY_SETTINGS, this.settings);
 
       this.notify();
-      return { success: true, message: "Backup data successfully restored and merged!" };
+      return {
+        success: true,
+        message:
+          skippedTotal > 0
+            ? `Restored and merged! (${skippedTotal} malformed row${skippedTotal === 1 ? "" : "s"} skipped)`
+            : "Backup data successfully restored and merged!",
+      };
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
       return { success: false, message: `Failed to restore: ${err}` };

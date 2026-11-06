@@ -231,7 +231,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // Reload data from DB on changes
   useEffect(() => {
     const unsub = db.subscribe(() => {
-      setMatch(db.getMatch(matchId));
+      const m = db.getMatch(matchId);
+      // Keep the last snapshot if the row vanished (deleted / cloud tombstone
+      // mid-scoring): switching to undefined takes the early-return path and
+      // skips the hooks after it — React "fewer hooks" crash + ErrorBoundary.
+      if (m) setMatch(m);
       setPlayersMap(db.getPlayersMap());
     });
     return unsub;
@@ -513,6 +517,10 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     ) => {
       const liveMatch = db.getMatch(matchId);
       if (!liveMatch) return;
+      // Never mutate a finished/abandoned match (e.g. opened from a stale
+      // "Resume" link): scoring a completed match appends balls while the
+      // recorded result text/winner stay frozen — corrupted match record.
+      if (liveMatch.status !== "live") return;
       const liveInnIdx = liveMatch.currentInningsIndex;
       const liveInn = liveMatch.innings[liveInnIdx];
       if (!liveInn) return;
@@ -692,7 +700,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // per tap (React state is async and would otherwise replay the same slice).
   const handleUndo = () => {
     const liveMatch = db.getMatch(matchId);
-    if (!liveMatch) return;
+    if (!liveMatch || liveMatch.status !== "live") return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
     if (!liveInn || liveInn.ballEvents.length === 0) return;
     const updatedEvents = liveInn.ballEvents.slice(0, -1);
@@ -705,7 +713,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // Swap striker manually (live db read — same stale-state guard as undo)
   const handleSwapStriker = () => {
     const liveMatch = db.getMatch(matchId);
-    if (!liveMatch) return;
+    if (!liveMatch || liveMatch.status !== "live") return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
     if (!liveInn || liveInn.ballEvents.length === 0) return;
     const last = { ...liveInn.ballEvents[liveInn.ballEvents.length - 1] };
@@ -754,7 +762,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // matched against the newest persisted events, never a stale snapshot)
   const handleSaveShotDirection = (dir: ShotDirection) => {
     const liveMatch = db.getMatch(matchId);
-    if (!liveMatch || !pendingWagonBall) return;
+    if (!liveMatch || liveMatch.status !== "live" || !pendingWagonBall) return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
     if (!liveInn) return;
     const updatedEvents = liveInn.ballEvents.map((b) =>
@@ -772,6 +780,10 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     const stat = scorecard.batters.find((b) => b.playerId === pId);
     return !stat || (!stat.isOut && pId !== strikerId && pId !== nonStrikerId);
   });
+
+  // Pad is only interactive while the match is live (guards above make every
+  // write path no-op on finished matches; this keeps the UI honest too).
+  const isMatchLive = match.status === "live";
 
   const isLeftHandPad = settings.padHand === "left";
 
@@ -1210,6 +1222,27 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           </View>
 
           {/* Grid of Big Runs: 0, 1, 2, 3, 4, 6 */}
+          {!isMatchLive ? (
+            <View
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                paddingVertical: 14,
+                marginBottom: 10,
+                borderWidth: 1,
+                borderRadius: 10,
+                borderColor: colors.hairlineStrong,
+                backgroundColor: colors.surfaceCard,
+              }}
+            >
+              <Text style={{ fontSize: 13, fontFamily: FONTS.sansSemiBold, color: colors.ink }}>
+                {match.resultText || "Match completed"}
+              </Text>
+              <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
+                Scoring is closed for this match — view the scorecard from Matches.
+              </Text>
+            </View>
+          ) : (
           <View
             style={{
               flexDirection: isLeftHandPad ? "row-reverse" : "row",
@@ -1224,11 +1257,13 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                   key={run}
                   label={`${run}`}
                   isBoundary={isBoundary}
+                  disabled={!isMatchLive}
                   onPress={() => recordBall(run)}
                 />
               );
             })}
           </View>
+          )}
 
           {/* Extras Row: Wd, Nb, Bye, LB, +Custom */}
           <View style={{ flexDirection: "row", gap: 8, marginBottom: 10 }}>

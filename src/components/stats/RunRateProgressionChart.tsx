@@ -5,7 +5,7 @@
  * Allows comparative analysis between 1st innings and 2nd innings chase tempo.
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import Svg, {
   Circle,
@@ -96,7 +96,7 @@ export const RunRateProgressionChart: React.FC<RunRateProgressionChartProps> = (
   const eligibleMatches = useMemo(() => {
     return allMatches.filter(
       (m) =>
-        m.innings.some((inn) => inn.ballEvents.length > 0)
+        m.innings?.some((inn) => inn.ballEvents.length > 0)
     );
   }, [allMatches]);
 
@@ -121,6 +121,16 @@ export const RunRateProgressionChart: React.FC<RunRateProgressionChartProps> = (
       null
     );
   }, [allMatches, eligibleMatches, selectedMatchId]);
+
+  // Reset the per-match view state when a different match is picked: a stale
+  // "innings 2" filter on a 1-innings match left BOTH series hidden — an
+  // empty chart with no visible selection and no way to know why.
+  useEffect(() => {
+    setSelectedOver(null);
+    if (inningsFilter === "inn2" && !selectedMatch?.innings[1]) {
+      setInningsFilter("both");
+    }
+  }, [selectedMatchId, inningsFilter, selectedMatch]);
 
   const playersMap = db.getPlayersMap();
 

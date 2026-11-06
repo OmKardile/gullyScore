@@ -96,7 +96,7 @@ const CrashFallback: React.FC<{ message: string; onRetry: () => void }> = ({
             color: "#FFFFFF",
           }}
         >
-          Reload App
+          Try Again
         </Text>
       </Pressable>
     </View>
