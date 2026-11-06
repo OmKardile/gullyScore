@@ -26,6 +26,10 @@ const STORAGE_KEY_TOURNAMENTS = "gullyscore_tournaments_v1";
 const STORAGE_KEY_FIXTURES = "gullyscore_fixtures_v1";
 const STORAGE_KEY_SETTINGS = "gullyscore_settings_v1";
 const STORAGE_KEY_ACTIVE_MATCH_ID = "gullyscore_active_match_id";
+// Set ("1") after a deliberate Wipe All Local Data. Distinguishes "user wiped
+// everything on purpose" from "fresh install" — init() reseeds demo data for
+// fresh installs only, so a wiped device must STAY empty across restarts.
+const STORAGE_KEY_WIPED = "gullyscore_wiped_v1";
 
 export interface AppSettings {
   theme: "light" | "dark" | "system";
@@ -33,6 +37,8 @@ export interface AppSettings {
   keepScreenOn: boolean;
   haptics: boolean;
   defaultRules: MatchRules;
+  /** Whether the first-launch guide tour has been seen (shown/skipped). */
+  tourCompleted: boolean;
 }
 
 export const DEFAULT_RULES: MatchRules = {
@@ -55,6 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   keepScreenOn: true,
   haptics: true,
   defaultRules: DEFAULT_RULES,
+  tourCompleted: false,
 };
 
 class GullyDb {
@@ -121,12 +128,18 @@ class GullyDb {
         const aRaw = await AsyncStorage.getItem(STORAGE_KEY_ACTIVE_MATCH_ID);
         this.activeMatchId = aRaw ?? null;
 
-        if (Object.keys(this.players).length === 0) {
+        const wipedRaw = await AsyncStorage.getItem(STORAGE_KEY_WIPED);
+        const intentionallyWiped = wipedRaw === "1";
+
+        if (Object.keys(this.players).length === 0 && !intentionallyWiped) {
           this.seedInitialData();
         }
       } catch (e) {
         console.error("Failed to load GullyScore database from AsyncStorage:", e);
-        if (Object.keys(this.players).length === 0) {
+        // Seed only when the failure looks like a fresh install (no data at
+        // all AND no deliberate wipe marker) — a wiped device stays empty.
+        const wipedRaw = await AsyncStorage.getItem(STORAGE_KEY_WIPED).catch(() => null);
+        if (Object.keys(this.players).length === 0 && wipedRaw !== "1") {
           this.seedInitialData();
         }
       }
@@ -474,6 +487,35 @@ class GullyDb {
   /** One re-render after a batch of cloud rows was applied. */
   public notifyDataChanged() {
     this.notify();
+  }
+
+  /** Deletes ALL local cricket data (players, teams, matches, tournaments,
+   *  fixtures, active-match pointer). User settings (theme, haptics, tour
+   *  seen) are intentionally KEPT so the app still feels like yours. Marks
+   *  storage as deliberately-wiped so the next boot does NOT reseed demo
+   *  data — an empty GullyScore stays empty until the user adds content. */
+  public wipeAllData() {
+    this.players = {};
+    this.teams = {};
+    this.matches = {};
+    this.tournaments = {};
+    this.fixtures = {};
+    this.activeMatchId = null;
+    this.persist(STORAGE_KEY_PLAYERS, this.players);
+    this.persist(STORAGE_KEY_TEAMS, this.teams);
+    this.persist(STORAGE_KEY_MATCHES, this.matches);
+    this.persist(STORAGE_KEY_TOURNAMENTS, this.tournaments);
+    this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+    AsyncStorage.removeItem(STORAGE_KEY_ACTIVE_MATCH_ID).catch(() => {});
+    AsyncStorage.setItem(STORAGE_KEY_WIPED, "1").catch(() => {});
+    this.notify();
+  }
+
+  /** Re-arms the fresh-install experience: clears the wiped marker so the
+   *  demo teams/matches/tournament get seeded again on next init/seed call. */
+  public reseedDemoData() {
+    AsyncStorage.setItem(STORAGE_KEY_WIPED, "0").catch(() => {});
+    this.seedInitialData();
   }
 
   // --- Settings ---

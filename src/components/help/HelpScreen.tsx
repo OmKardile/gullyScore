@@ -12,12 +12,15 @@
  */
 
 import React from "react";
-import { SafeAreaView, ScrollView, Text, View } from "react-native";
-import { Award, BookOpen } from "lucide-react-native";
+import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Award, BookOpen, ChevronRight, CircleHelp } from "lucide-react-native";
 import { GullyButton } from "../common/Components";
 import { useTheme, FONTS } from "../../design/theme";
 
-export const HelpScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+export const HelpScreen: React.FC<{
+  onBack: () => void;
+  onOpenFaq: () => void;
+}> = ({ onBack, onOpenFaq }) => {
   const { colors } = useTheme();
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -64,6 +67,63 @@ export const HelpScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             gap: 24,
           }}
         >
+          {/* FAQ quick link — the rules below are reference material; the
+              FAQ answers the day-to-day "how do I…" questions first. */}
+          <Pressable
+            onPress={onOpenFaq}
+            accessibilityRole="button"
+            accessibilityLabel="Open frequently asked questions"
+            style={({ pressed }) => [
+              {
+                backgroundColor: colors.surfaceCard,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+                borderRadius: 10,
+                padding: 14,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: colors.accentSubtle,
+              }}
+            >
+              <CircleHelp size={18} strokeWidth={1.8} color={colors.accent} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  fontFamily: FONTS.serif,
+                  fontWeight: "700",
+                  fontSize: 15,
+                  color: colors.ink,
+                }}
+              >
+                Frequently Asked Questions
+              </Text>
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: FONTS.sans,
+                  color: colors.ink2,
+                  marginTop: 2,
+                }}
+              >
+                Getting started, mistakes &amp; undo, backup, wipe — quick answers.
+              </Text>
+            </View>
+            <ChevronRight size={18} strokeWidth={2} color={colors.ink2} />
+          </Pressable>
+
           {/* Core Engine Rules */}
           <View
             style={{

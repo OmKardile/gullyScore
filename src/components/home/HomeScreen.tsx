@@ -40,6 +40,7 @@ import {
   TrendingUp,
   Inbox,
   CheckCircle2,
+  CircleHelp,
 } from "lucide-react-native";
 import { replayInnings } from "../../engine/scoringEngine";
 import { calculateLiveWinProbability } from "../../engine/predictionEngine";
@@ -51,6 +52,7 @@ interface HomeScreenProps {
   onResumeMatch: (matchId: string) => void;
   onOpenMatchDetail: (matchId: string) => void;
   onOpenSettings: () => void;
+  onOpenHelp: () => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
@@ -58,6 +60,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onResumeMatch,
   onOpenMatchDetail,
   onOpenSettings,
+  onOpenHelp,
 }) => {
   const { colors } = useTheme();
   const [matches, setMatches] = useState<Match[]>(() => db.getMatches());
@@ -185,6 +188,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </Text>
         </View>
 
+        <Pressable
+          onPress={onOpenHelp}
+          accessibilityRole="button"
+          accessibilityLabel="Help and FAQ"
+          hitSlop={8}
+          style={({ pressed }) => ({
+            padding: 6,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <CircleHelp size={20} strokeWidth={1.5} color={colors.ink2} />
+        </Pressable>
         <Pressable
           onPress={onOpenSettings}
           accessibilityRole="button"
@@ -570,21 +585,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             {/* Actions hint — RN port has explicit Resume / Archive buttons on
                 every match card (the web swipe gestures were replaced), so the
                 old "swipe right/left" hint described an interaction that does
-                not exist here. */}
+                not exist here. Stacked vertically: the two side-by-side texts
+                collided in the middle on narrow phones. */}
             <View
               style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
+                flexDirection: "column",
+                gap: 2,
                 paddingHorizontal: 12,
-                paddingVertical: 6,
+                paddingVertical: 8,
                 backgroundColor: colors.surfaceCard,
                 borderWidth: 1,
                 borderColor: colors.hairline,
                 borderRadius: 6,
               }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text
                   style={{
                     fontSize: 11,
@@ -602,10 +617,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     fontFamily: FONTS.sans,
                   }}
                 >
-                  Tap a match to view its scorecard
+                  Tap a match to open its full scorecard
                 </Text>
               </View>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text
                   style={{
                     fontSize: 11,
@@ -613,7 +628,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     fontFamily: FONTS.sans,
                   }}
                 >
-                  Use the buttons to resume or archive
+                  Use its buttons to resume scoring or archive it
                 </Text>
                 <Text
                   style={{

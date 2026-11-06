@@ -10,7 +10,7 @@
  * - ErrorBoundary + font/boot gates
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -42,6 +42,8 @@ import { TournamentsScreen } from "./src/components/tournaments/TournamentsScree
 import { StatsScreen } from "./src/components/stats/StatsScreen";
 import { SettingsScreen } from "./src/components/settings/SettingsScreen";
 import { HelpScreen } from "./src/components/help/HelpScreen";
+import { FaqScreen } from "./src/components/help/FaqScreen";
+import { GuideTourScreen } from "./src/components/help/GuideTourScreen";
 import { ComponentGalleryScreen } from "./src/components/gallery/ComponentGalleryScreen";
 
 type MainTab = "matches" | "teams" | "tournaments" | "stats";
@@ -55,6 +57,8 @@ export type RootStackParamList = {
   MatchDetail: { matchId: string };
   Settings: undefined;
   Help: undefined;
+  Faq: undefined;
+  Guide: undefined;
   Gallery: undefined;
 };
 
@@ -122,6 +126,8 @@ function SettingsRoute({
     <SettingsScreen
       onBack={() => navigation.goBack()}
       onOpenHelp={() => navigation.navigate("Help")}
+      onOpenFaq={() => navigation.navigate("Faq")}
+      onStartTour={() => navigation.navigate("Guide")}
       onOpenGallery={() => navigation.navigate("Gallery")}
       onThemeChanged={() => {}}
     />
@@ -131,7 +137,18 @@ function SettingsRoute({
 function HelpRoute({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Help">) {
-  return <HelpScreen onBack={() => navigation.goBack()} />;
+  return (
+    <HelpScreen
+      onBack={() => navigation.goBack()}
+      onOpenFaq={() => navigation.navigate("Faq")}
+    />
+  );
+}
+
+function FaqRoute({
+  navigation,
+}: NativeStackScreenProps<RootStackParamList, "Faq">) {
+  return <FaqScreen onBack={() => navigation.goBack()} />;
 }
 
 function GalleryRoute({
@@ -169,6 +186,7 @@ function MainTabs() {
             onResumeMatch={(mId) => navigation.navigate("Scoring", { matchId: mId })}
             onOpenMatchDetail={(mId) => navigation.navigate("MatchDetail", { matchId: mId })}
             onOpenSettings={() => navigation.navigate("Settings")}
+            onOpenHelp={() => navigation.navigate("Help")}
           />
         )}
 
@@ -279,6 +297,7 @@ function MainTabs() {
 
 function Root() {
   const { colors } = useTheme();
+  const navigation = useNavigation<Nav>();
   const [booted, setBooted] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [fontsLoaded] = useAppFonts();
@@ -303,6 +322,20 @@ function Root() {
     const t = setTimeout(() => setFontFallback(true), 8000);
     return () => clearTimeout(t);
   }, [runBoot]);
+
+  // First-launch guide tour: once the app has booted and the fonts (or their
+  // fallback) are ready, walk a brand-new user through the app exactly once.
+  // tourCompleted persists on finish/skip, so reinstalls that restore a
+  // backup never see it again.
+  const tourArmedRef = useRef(false);
+  const fontsReady = fontsLoaded || fontFallback;
+  useEffect(() => {
+    if (!booted || !fontsReady || tourArmedRef.current) return;
+    tourArmedRef.current = true;
+    if (!db.getSettings().tourCompleted) {
+      navigation.navigate("Guide");
+    }
+  }, [booted, fontsReady, navigation]);
 
   if (bootError) {
     return (
@@ -401,6 +434,12 @@ function Root() {
       <Stack.Screen name="MatchDetail" component={MatchDetailRoute} />
       <Stack.Screen name="Settings" component={SettingsRoute} />
       <Stack.Screen name="Help" component={HelpRoute} />
+      <Stack.Screen name="Faq" component={FaqRoute} />
+      <Stack.Screen
+        name="Guide"
+        component={GuideTourScreen}
+        options={{ animation: "fade" }}
+      />
       <Stack.Screen name="Gallery" component={GalleryRoute} />
     </Stack.Navigator>
   );

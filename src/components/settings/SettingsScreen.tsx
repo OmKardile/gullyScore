@@ -25,7 +25,7 @@ import {
 // RN: dropped web-only Moon/Sun/Smartphone/Vibrate imports (unused on web too)
 // and Download/Upload/RefreshCw/Palette/HelpCircle button icons (Svg cannot
 // nest inside GullyButton's Text children).
-import { Check, ChevronLeft, Cloud, CloudOff, HardDrive, RefreshCw } from "lucide-react-native";
+import { Check, ChevronLeft, Cloud, CloudOff, HardDrive, RefreshCw, TriangleAlert } from "lucide-react-native";
 import { db, AppSettings } from "../../storage/db";
 import {
   createNewSpace,
@@ -48,6 +48,8 @@ import { useTheme, FONTS } from "../../design/theme";
 interface SettingsScreenProps {
   onBack: () => void;
   onOpenHelp: () => void;
+  onOpenFaq: () => void;
+  onStartTour: () => void;
   onOpenGallery: () => void;
   onThemeChanged: () => void;
 }
@@ -81,6 +83,8 @@ const CheckBox: React.FC<{ checked: boolean; onPress: () => void }> = ({
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onBack,
   onOpenHelp,
+  onOpenFaq,
+  onStartTour,
   onOpenGallery,
   onThemeChanged,
 }) => {
@@ -111,6 +115,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [importText, setImportText] = useState("");
   // RN: window.confirm → inline confirm row state.
   const [confirmReset, setConfirmReset] = useState(false);
+  // Danger Zone: Wipe All Local Data (separate, deliberate two-step confirm).
+  const [confirmWipe, setConfirmWipe] = useState(false);
 
   // --- Cloud Sync (Supabase Sync Spaces v1) ---
   const [syncState, setSyncState] = useState(getSyncState());
@@ -222,11 +228,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
   const handleResetSeedData = () => {
     // RN: window.confirm → inline confirm row (confirmReset state above).
-    db.seedInitialData();
+    // reseedDemoData also clears the intentional-wipe marker so a fresh
+    // install's demo content comes back (and STAYS back across restarts).
+    db.reseedDemoData();
     onThemeChanged();
     setConfirmReset(false);
     setBackupStatus("Demo data reloaded!");
     setTimeout(() => setBackupStatus(""), 3000);
+  };
+
+  const handleWipeAll = () => {
+    // If a Sync Space is connected, leave it BEFORE wiping: otherwise the
+    // next sync would push the vanished rows as deletions (tombstones) and
+    // silently erase the shared cloud copy too. Leaving first keeps the
+    // wipe strictly local — the friend's data is never disturbed.
+    const spaceName = getSyncState().code;
+    if (spaceName) leaveSpace();
+    db.wipeAllData();
+    setConfirmWipe(false);
+    setBackupStatus(
+      spaceName
+        ? "All local data wiped. Sync Space left first, so the shared cloud copy is safe."
+        : "All local data wiped."
+    );
+    setTimeout(() => setBackupStatus(""), 8000);
   };
 
   const section = {
@@ -356,9 +381,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 </Text>
               </View>
               <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2 }}>
-                {dataCounts.matches} matches · {dataCounts.teams} teams ·{" "}
-                {dataCounts.players} players · {dataCounts.tournaments} tournaments
-                stored locally (offline-first, AsyncStorage)
+                {dataCounts.matches} {dataCounts.matches === 1 ? "match" : "matches"} ·{" "}
+                {dataCounts.teams} {dataCounts.teams === 1 ? "team" : "teams"} ·{" "}
+                {dataCounts.players} {dataCounts.players === 1 ? "player" : "players"} ·{" "}
+                {dataCounts.tournaments}{" "}
+                {dataCounts.tournaments === 1 ? "tournament" : "tournaments"} stored locally
+                (offline-first, AsyncStorage)
               </Text>
             </View>
           </View>
@@ -714,15 +742,106 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           </View>
         </View>
 
+        {/* Help & Learning */}
+        <View style={[section, { flexDirection: "column", gap: 8 }]}>
+          <Text style={sectionLabel}>Help &amp; Learning</Text>
+          <GullyButton variant="quiet" fullWidth onPress={onStartTour}>
+            Replay Guide Tour (7 Steps)
+          </GullyButton>
+          <GullyButton variant="quiet" fullWidth onPress={onOpenFaq}>
+            Frequently Asked Questions (FAQ)
+          </GullyButton>
+          <GullyButton variant="quiet" fullWidth onPress={onOpenHelp}>
+            Scoring Rules &amp; MVP Guide
+          </GullyButton>
+        </View>
+
         {/* Development & Design QA */}
         <View style={[section, { flexDirection: "column", gap: 8 }]}>
           <Text style={sectionLabel}>Design QA &amp; Verification</Text>
           <GullyButton variant="quiet" fullWidth onPress={onOpenGallery}>
             Component Gallery (Design Tokens)
           </GullyButton>
-          <GullyButton variant="quiet" fullWidth onPress={onOpenHelp}>
-            Scoring Rules &amp; MVP Guide
-          </GullyButton>
+        </View>
+
+        {/* Danger Zone — Wipe All Local Data */}
+        <View
+          style={[
+            section,
+            {
+              flexDirection: "column",
+              gap: 10,
+              borderWidth: 1,
+              borderColor: colors.warning,
+            },
+          ]}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <TriangleAlert size={16} color={colors.warning} />
+            <Text style={sectionLabel}>Danger Zone</Text>
+          </View>
+          <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, lineHeight: 19 }}>
+            Permanently erase every match, team, player, tournament and fixture
+            stored on this device. This cannot be undone — export a backup first.
+            Your settings are kept, and if a Sync Space is connected you are
+            taken out of it first so the shared cloud copy stays safe.
+          </Text>
+
+          {confirmWipe ? (
+            <View style={{ flexDirection: "column", gap: 8 }}>
+              <View
+                style={{
+                  padding: 10,
+                  backgroundColor: colors.accentSubtle,
+                  borderWidth: 1,
+                  borderColor: colors.accent,
+                  borderRadius: 8,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontFamily: FONTS.sansSemiBold,
+                    color: colors.ink,
+                    lineHeight: 18,
+                  }}
+                >
+                  Erase {dataCounts.matches} {dataCounts.matches === 1 ? "match" : "matches"} ·{" "}
+                  {dataCounts.teams} {dataCounts.teams === 1 ? "team" : "teams"} ·{" "}
+                  {dataCounts.players} {dataCounts.players === 1 ? "player" : "players"} ·{" "}
+                  {dataCounts.tournaments}{" "}
+                  {dataCounts.tournaments === 1 ? "tournament" : "tournaments"} from this
+                  device?
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <GullyButton
+                  size="sm"
+                  variant="accent"
+                  fullWidth
+                  onPress={handleWipeAll}
+                >
+                  Yes, Wipe Everything
+                </GullyButton>
+                <GullyButton
+                  size="sm"
+                  variant="quiet"
+                  fullWidth
+                  onPress={() => setConfirmWipe(false)}
+                >
+                  Cancel
+                </GullyButton>
+              </View>
+            </View>
+          ) : (
+            <GullyButton
+              variant="accent"
+              fullWidth
+              onPress={() => setConfirmWipe(true)}
+            >
+              Wipe All Local Data
+            </GullyButton>
+          )}
         </View>
 
         {/* About & Mandatory Credits */}
@@ -736,7 +855,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           ]}
         >
           <Text style={{ fontSize: 16, fontFamily: FONTS.serif, fontWeight: "700", color: colors.ink }}>
-            GullyScore v1.4.5
+            GullyScore v1.4.6
           </Text>
           <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2, textAlign: "center" }}>
             Offline-first cricket scoring &amp; stats for local teams.
