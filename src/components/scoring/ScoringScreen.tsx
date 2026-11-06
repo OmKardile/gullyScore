@@ -16,16 +16,8 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import {
-  Modal,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  Vibration,
-  View,
-} from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, Vibration, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   BallEvent,
   DismissalInfo,

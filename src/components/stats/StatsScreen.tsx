@@ -6,7 +6,8 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { db } from "../../storage/db";
 import { replayInnings, calculateMatchMVPPoints } from "../../engine/scoringEngine";
 import { GullySegmented, GullyChip } from "../common/Components";

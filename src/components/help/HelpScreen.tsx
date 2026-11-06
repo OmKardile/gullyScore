@@ -12,7 +12,8 @@
  */
 
 import React from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Award, BookOpen, ChevronRight, CircleHelp } from "lucide-react-native";
 import { GullyButton } from "../common/Components";
 import { useTheme, FONTS } from "../../design/theme";
@@ -564,39 +565,6 @@ export const HelpScreen: React.FC<{
               }}
             >
               NRR = (Total Runs Scored / Total Overs Faced) - (Total Runs Conceded / Total Overs Bowled). Per official ICC standards, if a team is bowled all-out before completing their quota, their overs faced are counted as the full innings quota (e.g. 10.0 overs).
-            </Text>
-          </View>
-
-          {/* Credits */}
-          <View
-            style={{
-              padding: 16,
-              backgroundColor: colors.surface,
-              borderWidth: 1,
-              borderColor: colors.hairline,
-              borderRadius: 10,
-              alignItems: "center",
-            }}
-          >
-            <Text
-              style={{
-                fontSize: 12,
-                color: colors.ink2,
-                fontFamily: FONTS.sans,
-                textAlign: "center",
-              }}
-            >
-              {/* RN: dropped external link (web-only <a href>) */}
-              Designed & developed by{" "}
-              <Text
-                style={{
-                  fontWeight: "500",
-                  color: colors.ink,
-                  fontFamily: FONTS.sans,
-                }}
-              >
-                Omkar Kardile
-              </Text>
             </Text>
           </View>
         </View>

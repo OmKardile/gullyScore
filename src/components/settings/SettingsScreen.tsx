@@ -14,14 +14,8 @@
  */
 
 import React, { useEffect, useState } from "react";
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 // RN: dropped web-only Moon/Sun/Smartphone/Vibrate imports (unused on web too)
 // and Download/Upload/RefreshCw/Palette/HelpCircle button icons (Svg cannot
 // nest inside GullyButton's Text children).

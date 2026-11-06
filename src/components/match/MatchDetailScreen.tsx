@@ -14,14 +14,8 @@
  */
 
 import React, { useState, useMemo, useEffect } from "react";
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Match, Player } from "../../types/cricket";
 import { db } from "../../storage/db";
 import {

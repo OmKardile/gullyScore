@@ -17,7 +17,8 @@
  */
 
 import React, { useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { ChevronLeft, CheckSquare, Square } from "lucide-react-native";
 import {
   GullyButton,
@@ -356,17 +357,6 @@ export const ComponentGalleryScreen: React.FC<{ onBack: () => void }> = ({
             Run-Rate Progression (Recharts Analytics)
           </Text>
           <RunRateProgressionChart />
-        </View>
-
-        {/* Developer Credit Footer */}
-        <View style={[section, { alignItems: "center" }]}>
-          <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, textAlign: "center" }}>
-            Designed &amp; developed by{" "}
-            {/* RN: web <a href> link → static styled text (no browser links). */}
-            <Text style={{ fontWeight: "500", color: colors.ink }}>
-              Omkar Kardile
-            </Text>
-          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>

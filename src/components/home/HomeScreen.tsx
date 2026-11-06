@@ -17,14 +17,8 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import {
-  Animated,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { Animated, Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Match, Fixture } from "../../types/cricket";
 import { db } from "../../storage/db";
 import {

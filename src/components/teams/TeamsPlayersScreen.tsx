@@ -14,14 +14,8 @@
  */
 
 import React, { useState, useMemo, useEffect } from "react";
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Player,
   Team,
@@ -504,7 +498,7 @@ export const TeamsPlayersScreen: React.FC = () => {
         <View style={{ flexDirection: "column", gap: 16 }}>
           <GullyTextField
             label="Full Name"
-            placeholder="e.g. Omkar Kardile"
+            placeholder="e.g. Arjun Patil"
             value={newPlayerName}
             onChangeText={setNewPlayerName}
           />

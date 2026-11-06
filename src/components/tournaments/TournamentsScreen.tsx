@@ -6,7 +6,8 @@
  */
 
 import React, { useState, useMemo, useEffect } from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Fixture, MatchRules, Tournament } from "../../types/cricket";
 import { db, DEFAULT_RULES } from "../../storage/db";
 import {

@@ -552,7 +552,6 @@ class GullyDb {
       schemaVersion: SCHEMA_VERSION,
       appName: "GullyScore",
       exportedAt: new Date().toISOString(),
-      credit: "Designed & developed by Omkar Kardile (https://omkardile.is-a.dev/)",
       players: this.players,
       teams: this.teams,
       matches: this.matches,

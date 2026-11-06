@@ -162,7 +162,7 @@ function GalleryRoute({
 /* ------------------------------------------------------------------ */
 
 function MainTabs() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const navigation = useNavigation<Nav>();
   const [activeTab, setActiveTab] = useState<MainTab>("matches");
 
@@ -178,7 +178,7 @@ function MainTabs() {
   // Main Tab Destinations
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <StatusBar barStyle="default" />
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
       <View style={{ flex: 1 }}>
         {activeTab === "matches" && (
           <HomeScreen

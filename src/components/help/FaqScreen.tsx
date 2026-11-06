@@ -10,13 +10,8 @@
  */
 
 import React, { useState } from "react";
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { ChevronDown, ChevronLeft } from "lucide-react-native";
 import { useTheme, FONTS } from "../../design/theme";
 

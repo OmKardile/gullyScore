@@ -7,7 +7,6 @@
 
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  Linking,
   Pressable,
   ScrollView,
   Text,
@@ -2260,25 +2259,6 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
           </View>
         )}
 
-        {/* Modal Footer Attribution */}
-        <View style={{ paddingTop: 8, alignItems: "center" }}>
-          <Text
-            style={{
-              fontSize: 11,
-              color: colors.ink2,
-              textAlign: "center",
-              fontFamily: FONTS.sans,
-            }}
-          >
-            Designed & developed by{" "}
-            <Text
-              onPress={() => Linking.openURL("https://omkardile.is-a.dev/")}
-              style={{ fontWeight: "500", color: colors.ink }}
-            >
-              Omkar Kardile
-            </Text>
-          </Text>
-        </View>
       </View>
     </GullySheet>
   );

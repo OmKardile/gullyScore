@@ -34,6 +34,7 @@ import {
   Platform,
 } from "react-native";
 import Svg, { Circle, Ellipse, Line, Rect, Polyline } from "react-native-svg";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme, FONTS } from "../../design/theme";
 
 // --- BUTTONS ---
@@ -343,6 +344,7 @@ export const GullySheet: React.FC<BottomSheetProps> = ({
   children,
 }) => {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   return (
     <Modal
       visible={isOpen}
@@ -409,7 +411,7 @@ export const GullySheet: React.FC<BottomSheetProps> = ({
           ) : null}
           <ScrollView
             style={{ paddingHorizontal: 20, paddingVertical: 20 }}
-            contentContainerStyle={{ paddingBottom: 40 }}
+            contentContainerStyle={{ paddingBottom: Math.max(40, insets.bottom + 24) }}
           >
             {children}
           </ScrollView>
