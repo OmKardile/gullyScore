@@ -1,6 +1,6 @@
 {
   "name": "gullyscorern",
-  "version": "1.4.1",
+  "version": "1.4.5",
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/baloo-2": "^0.4.2",

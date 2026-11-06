@@ -20,6 +20,7 @@ import { Platform } from "react-native";
 import {
   CloudSyncError,
   createSpace,
+  PULL_LIMIT,
   probeBackend,
   probeSpace,
   pullRows,
@@ -215,10 +216,12 @@ function localIdForRemoteKey(remoteKey: string, kind: SyncKind): string {
   const rev = reverseMap();
   const known = rev.get(remoteKey);
   if (known) return known;
-  const { tag, suffix } = stripPrefix(remoteKey);
-  const localId = tag === state.deviceTag ? suffix : suffix;
-  state.idMap[localId] = { key: remoteKey, kind };
-  return localId;
+  // Reuse the originating device's suffix as our local id: ids are opaque,
+  // kind-prefixed strings ("p_…", "m_…"), so foreign suffixes don't collide
+  // with ours in practice (same scheme as the Kotlin client).
+  const { suffix } = stripPrefix(remoteKey);
+  state.idMap[suffix] = { key: remoteKey, kind };
+  return suffix;
 }
 
 /** The remote key for a local id, allocating one on first push. */
@@ -339,7 +342,7 @@ function localSnapshot(): Array<{ kind: SyncKind; entity: Record<string, unknown
   return out;
 }
 
-function buildPushRows(): PushRow[] {
+function buildPushRows(): { rows: PushRow[]; newTombstones: string[] } {
   const snapshot = localSnapshot();
   const now = Date.now();
   const rows: PushRow[] = [];
@@ -366,8 +369,13 @@ function buildPushRows(): PushRow[] {
   }
 
   // 3. Tombstones: rows we pushed before but that vanished locally since.
+  //    Returned for syncNow to commit ONLY after the push actually succeeds —
+  //    recording them here (or before the push) would permanently swallow
+  //    the delete if the push failed offline, because tombstoned keys are
+  //    never re-pushed. Keeping the idMap entries lets the next attempt
+  //    regenerate the same tombstone rows (server upserts are idempotent).
   const stillLocal = new Set(localToRemote.values());
-  const rev = reverseMap();
+  const newTombstones: string[] = [];
   for (const [localId, entry] of Object.entries(state.idMap)) {
     if (stillLocal.has(entry.key)) continue;
     if (state.tombstones.includes(entry.key)) continue;
@@ -378,16 +386,16 @@ function buildPushRows(): PushRow[] {
       updatedAtMs: now,
       updatedBy: deviceLabel(),
     });
-    state.tombstones.push(entry.key);
-    delete state.idMap[localId];
+    newTombstones.push(entry.key);
   }
-  return rows;
+  return { rows, newTombstones };
 }
 
 // ─── Orchestration ─────────────────────────────────────────────────────────
 
 export async function syncNow(): Promise<void> {
   if (!state.code) throw new CloudSyncError("No Sync Space connected");
+  const spaceCode = state.code; // narrowed once — closures below keep the type
   if (syncing) return;
   syncing = true;
   notify();
@@ -397,30 +405,59 @@ export async function syncNow(): Promise<void> {
     notify();
     // PULL — apply remote changes first so the push that follows is a
     // superset (server LWW rejects stale writes either way).
-    const rows = await pullRows(state.code, state.lastPullMs);
-    const remoteToLocal = reverseMap();
+    // gs_rows pulls are capped at 1000 rows: loop until a short page so big
+    // spaces (>1000 changed rows, e.g. a fresh join mirror) are never
+    // silently truncated by the cursor jumping past unseen rows. After a
+    // FULL page, re-pull its boundary millisecond inclusively — rows sharing
+    // that exact updated_at ms can straddle the page cut, and `gt` alone
+    // would skip the cut-off half forever (silent data loss).
+    let since = state.lastPullMs;
     let applied = 0;
-    let maxSeen = state.lastPullMs;
-    for (const row of rows) {
-      maxSeen = Math.max(maxSeen, row.updatedAtMs);
-      const known = remoteToLocal.get(row.id);
-      if (known) remoteToLocal.set(row.id, known);
-      // note: localIdForRemoteKey inside applyPulledRow also extends the
-      // idMap; refresh the remap view after the first row maps a new key.
-      if (applyPulledRow(row, remoteToLocal)) applied += 1;
-      const rev = reverseMap();
-      for (const [k, v] of rev) remoteToLocal.set(k, v);
+    const seen = new Set<string>();
+    const remoteToLocal = reverseMap();
+    const pullAndApply = async (
+      inclusive: boolean,
+    ): Promise<{ count: number; pageMax: number }> => {
+      const rows = await pullRows(spaceCode, since, inclusive);
+      let pageMax = since;
+      for (const row of rows) {
+        pageMax = Math.max(pageMax, row.updatedAtMs);
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        if (applyPulledRow(row, remoteToLocal)) applied += 1;
+        // localIdForRemoteKey inside applyPulledRow also extends the idMap;
+        // refresh the remap view so later rows in this page resolve refs.
+        const rev = reverseMap();
+        for (const [k, v] of rev) remoteToLocal.set(k, v);
+      }
+      return { count: rows.length, pageMax };
+    };
+    const MAX_PULL_PAGES = 20; // 20k rows per sync — beyond that, the next sync continues
+    for (let page = 0; page < MAX_PULL_PAGES; page++) {
+      const { count, pageMax } = await pullAndApply(false);
+      if (count === 0) break;
+      since = pageMax;
+      if (count < PULL_LIMIT) break;
+      // Same-ms boundary catch-up (re-pulled rows are LWW no-ops).
+      await pullAndApply(true);
     }
-    state.lastPullMs = maxSeen;
+    state.lastPullMs = since;
     if (applied > 0) db.notifyDataChanged();
 
     // PUSH — full snapshot + tombstones.
     const push = buildPushRows();
-    await pushRows(state.code, push, deviceLabel());
+    await pushRows(spaceCode, push.rows, deviceLabel());
+    // Push succeeded — now commit the tombstones (see buildPushRows).
+    for (const key of push.newTombstones) {
+      if (!state.tombstones.includes(key)) state.tombstones.push(key);
+      for (const localId of Object.keys(state.idMap)) {
+        if (state.idMap[localId]?.key === key) delete state.idMap[localId];
+      }
+    }
 
     state.lastSyncAt = Date.now();
     state.lastResult = "ok";
-    state.lastSyncedCounts = { pushed: push.length, pulled: applied };
+    state.lastSyncedCounts = { pushed: push.rows.length, pulled: applied };
     persist();
     notify();
   } catch (e) {

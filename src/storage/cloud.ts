@@ -14,8 +14,8 @@ export const SUPABASE_URL = "https://wqgfftwxvbhlwftsknzo.supabase.co";
 // Publishable (anon) key — safe to embed; RLS + space codes protect data.
 const PUBLISHABLE_KEY = "sb_publishable_Qc32TSsQefru1Vgu3K9_wQ_AJoNHhtT";
 
-const PUSH_BATCH_SIZE = 100;
-const PULL_LIMIT = 1000;
+export const PUSH_BATCH_SIZE = 100;
+export const PULL_LIMIT = 1000;
 const REQUEST_TIMEOUT_MS = 15000;
 
 export interface PushRow {
@@ -177,11 +177,23 @@ export async function pushRows(
   }
 }
 
-/** Pulls every row changed since the epoch-ms cursor (max 1000, oldest first). */
-export async function pullRows(spaceCode: string, sinceMs: number): Promise<PulledRow[]> {
+/**
+ * Pulls rows changed since the epoch-ms cursor (max 1000, oldest first).
+ * `inclusive: true` narrows the pull to exactly the cursor's millisecond —
+ * used by the sync coordinator to catch rows that share updated_at ms with
+ * a page boundary and would otherwise be skipped by `gt` forever.
+ */
+export async function pullRows(
+  spaceCode: string,
+  sinceMs: number,
+  inclusive = false,
+): Promise<PulledRow[]> {
+  const filter = inclusive
+    ? `updated_at=gte.${sinceMs}&updated_at=lt.${sinceMs + 1}`
+    : `updated_at=gt.${sinceMs}`;
   const url =
     `${SUPABASE_URL}/rest/v1/gs_rows?select=id,kind,payload,updated_at,updated_by` +
-    `&updated_at=gt.${sinceMs}&order=updated_at.asc&limit=${PULL_LIMIT}`;
+    `&${filter}&order=updated_at.asc&limit=${PULL_LIMIT}`;
   const text = await request("GET", url, spaceCode);
   let parsed: unknown;
   try {

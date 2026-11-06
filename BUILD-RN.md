@@ -43,7 +43,7 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
     # do NOT lower it to 36 or the build fails).
 
     Output: android/app/build/outputs/apk/release/app-release.apk
-    (package dev.omkardile.gullyscore, versionName 1.4.1, minSdk 24, targetSdk 36)
+    (package dev.omkardile.gullyscore, versionName 1.4.5 / versionCode 4, minSdk 24, targetSdk 36)
 
 ### Route C — Ask the agent sandbox to build it
 The Android toolchain (JDK 21, SDK, NDK 27.1.12297006) fits in the sandbox;
@@ -51,14 +51,18 @@ expect ~45 min end-to-end including toolchain download. The sandbox build config
 is memory-tuned (Gradle Xmx1024m, workers.max=1, arm64-v8a only).
 
 ## Signing
-Signing is pre-configured: android/app/gullyscore-release.keystore
-(PKCS12, alias `gullyscore`, storepass `gullyscore2026`). APKs signed with it
-install as updates over existing installs. For Play Store, generate your own
-keystore and update android/app/build.gradle.
+Release signing reads `android/app/keystore.properties` (gitignored — see
+`keystore.properties.example`), which points at `android/app/gullyscore-release.keystore`
+(PKCS12, alias `gullyscore`). The keystore and the properties file are NOT in
+the repo — keep backups of both (losing the keystore means future APKs can't
+install as updates over release-signed installs). When either file is absent
+(e.g. a fresh clone), `assembleRelease` falls back to the standard debug key
+so builds never break. For Play Store, generate your own keystore and update
+the properties file.
 
 Note: `expo prebuild` will regenerate android/ — if it does, re-apply the
-signingConfig block in android/app/build.gradle (it references the committed
-keystore) or keep the committed android/ directory and build without --clean.
+signing block in android/app/build.gradle (it reads keystore.properties)
+or keep the committed android/ directory and build without --clean.
 
 ## Port layout
 - App.tsx: NavigationContainer + native stack (Tabs / Scoring / MatchSetup /

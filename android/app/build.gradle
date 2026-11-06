@@ -92,8 +92,8 @@ android {
         applicationId 'dev.omkardile.gullyscore'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.4.4"
+        versionCode 4
+        versionName "1.4.5"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -105,10 +105,23 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file('gullyscore-release.keystore')
-            storePassword 'gullyscore2026'
-            keyAlias 'gullyscore'
-            keyPassword 'gullyscore2026'
+            // Release credentials live in the gitignored keystore.properties
+            // (see keystore.properties.example). When either file is absent —
+            // e.g. on a fresh clone — fall back to the standard debug key so
+            // assembleRelease still produces an installable APK.
+            if (file('gullyscore-release.keystore').exists() && file('keystore.properties').exists()) {
+                def ksProps = new Properties()
+                file('keystore.properties').withInputStream { ksProps.load(it) }
+                storeFile file('gullyscore-release.keystore')
+                storePassword ksProps.getProperty('storePassword')
+                keyAlias ksProps.getProperty('keyAlias')
+                keyPassword ksProps.getProperty('keyPassword')
+            } else {
+                storeFile file('debug.keystore')
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
         }
     }
     buildTypes {
@@ -116,9 +129,8 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Signed with the generated gullyscore-release.keystore (self-signed
-            // PKCS12, checked into the project for reproducible release APKs).
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // Release-signed when keystore.properties + the release keystore
+            // are present; debug-signed otherwise (see signingConfigs.release).
             signingConfig signingConfigs.release
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()

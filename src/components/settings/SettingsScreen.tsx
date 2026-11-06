@@ -736,7 +736,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           ]}
         >
           <Text style={{ fontSize: 16, fontFamily: FONTS.serif, fontWeight: "700", color: colors.ink }}>
-            GullyScore v1.4.1
+            GullyScore v1.4.5
           </Text>
           <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, marginTop: 2, textAlign: "center" }}>
             Offline-first cricket scoring &amp; stats for local teams.

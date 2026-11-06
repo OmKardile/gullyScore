@@ -18,3 +18,8 @@ app/src/main/java/inline/
 
 # Bundle artifacts
 *.jsbundle
+
+# Release signing — never commit real keystores or credentials
+# (debug.keystore is the standard RN template key and stays tracked)
+android/app/keystore.properties
+android/app/gullyscore-release.keystore

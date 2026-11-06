@@ -1,9 +1,26 @@
 # GullyScore — Web Deploy to Render
 
 Pre-built static web app (Expo / React Native Web export of the GullyScore RN
-app, v1.4.4) with everything needed to host it permanently on Render.
+app, v1.4.5) with everything needed to host it permanently on Render.
 
-**What's new in 1.4.4** — full-codebase bug-hunt release (all found bugs
+**What's new in 1.4.5** — sync engine correctness + signing security:
+
+- **Sync data loss fixed (pull pagination)**: gs_rows pulls are capped at 1000
+  rows; the sync coordinator advanced its cursor from a single page, so
+  joining a space with more than 1000 rows silently skipped everything past
+  row 1000, and rows sharing a boundary millisecond could be cut by the page
+  limit. Pulls now page through until done, with a same-millisecond boundary
+  re-pull after full pages (verified live against Supabase with 1005 seeded
+  rows: old code 1000/1005, new code 1005/1005)
+- **Sync data loss fixed (failed pushes)**: deletes were recorded as "already
+  pushed" before the push actually succeeded, so a push that failed offline
+  permanently swallowed the delete on every other device. Tombstones now
+  commit only after a successful push
+- **Signing security**: the release keystore and its passwords are no longer
+  in version control (they now live in a gitignored `keystore.properties`;
+  fresh clones fall back to debug signing automatically)
+
+**What was fixed in 1.4.4** — full-codebase bug-hunt release (all found bugs
 fixed, E2E expanded to 48 checks):
 
 - **Freeze-class**: every heavy screen (points table, Monte Carlo simulation,
