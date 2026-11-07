@@ -28,13 +28,20 @@ import {
   WicketType,
 } from "../../types/cricket";
 import { db } from "../../storage/db";
-import { canEdit, getAccessState, subscribeAccess } from "../../storage/access";
+import {
+  AudienceModeError,
+  MatchLockedError,
+  canEdit,
+  getAccessState,
+  subscribeAccess,
+} from "../../storage/access";
 import { AccessBanner } from "../access/AccessBanner";
 import { UmpireKeySheet, UmpireSheetMode } from "../access/UmpireKeySheet";
 import {
   replayInnings,
   formatOvers,
   generateBallCommentary,
+  deriveLiveCrease,
 } from "../../engine/scoringEngine";
 import {
   GullyButton,
@@ -184,6 +191,18 @@ const RunKey: React.FC<{
   );
 };
 
+/** Human explanation for a db write failure — shown in the inline error
+ * banner so a failed save is never silent (and never crashes the app). */
+function explainDbError(e: unknown): string {
+  if (e instanceof AudienceModeError) {
+    return "your umpire session ended. Re-enter the umpire key to keep scoring.";
+  }
+  if (e instanceof MatchLockedError) {
+    return "this match is completed and locked. Reopen it from the scorecard to edit.";
+  }
+  return e instanceof Error ? e.message : "something went wrong while saving.";
+}
+
 export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   matchId,
   onExit,
@@ -222,6 +241,36 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
   // Edit ball log state
   const [editingBall, setEditingBall] = useState<BallEvent | null>(null);
+
+  // ── Save-error banner (1.4.7-test-3): every failed db write is shown here,
+  //  explained in plain words — no silent failures, no crashes.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!saveError) return;
+    const t = setTimeout(() => setSaveError(null), 7000);
+    return () => clearTimeout(t);
+  }, [saveError]);
+
+  /** True once the user has scored/edited anything THIS screen session —
+   *  guards the auto-end effect so a REOPENED match (whose innings is
+   *  already complete at mount) is never silently re-completed before the
+   *  user has actually corrected something. */
+  const sessionEditedRef = useRef(false);
+
+  // Start-of-innings openers + opening bowler sheet (1.4.7-test-3)
+  const [showOpenersSheet, setShowOpenersSheet] = useState(false);
+  const [openersStrikerId, setOpenersStrikerId] = useState("");
+  const [openersNonStrikerId, setOpenersNonStrikerId] = useState("");
+  const [openersBowlerId, setOpenersBowlerId] = useState("");
+  const openersArmedForRef = useRef<number | null>(null);
+
+  // Legacy-data rescue: a pre-1.4.7-test-3 log that ends on a wicket has no record
+  // of who came in — ask once, then persist the crease.
+  const [replacementOnly, setReplacementOnly] = useState(false);
+  const incomingArmedRef = useRef(false);
+
+  // Custom runs modal validation
+  const [customRunsError, setCustomRunsError] = useState<string | null>(null);
 
   // Keep screen on via WakeLock API if enabled
   // RN: dropped — navigator.wakeLock is a web-only API (no keep-awake module installed).
@@ -307,11 +356,24 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   const battingTeam = db.getTeam(currentInningsData.battingTeamId);
   const bowlingTeam = db.getTeam(currentInningsData.bowlingTeamId);
 
-  // Active batter & bowler determination
+  // Active batter & bowler determination (1.4.7-test-3):
+  //  1. the persisted crease state on the innings (authoritative — written
+  //     by every scoring action),
+  //  2. a deterministic derivation from the event log (pre-1.4.7-test-3 matches),
+  //  3. squad-order defaults.
+  // Before this, striker/bowler came from the LAST BALL only, so strike
+  // rotation, incoming batters and bowler changes were never reflected.
   const lastBall = ballEvents[ballEvents.length - 1];
-  const strikerId = lastBall?.strikerId || battingSquadIds[0] || "";
-  const nonStrikerId = lastBall?.nonStrikerId || battingSquadIds[1] || "";
-  const bowlerId = lastBall?.bowlerId || bowlingSquadIds[0] || "";
+  const derivedCrease = useMemo(
+    () => deriveLiveCrease(ballEvents, match.rules, battingSquadIds, bowlingSquadIds),
+    [ballEvents, match.rules, battingSquadIds, bowlingSquadIds]
+  );
+  const strikerId =
+    currentInningsData.strikerId || derivedCrease?.strikerId || battingSquadIds[0] || "";
+  const nonStrikerId =
+    currentInningsData.nonStrikerId || derivedCrease?.nonStrikerId || battingSquadIds[1] || "";
+  const bowlerId =
+    currentInningsData.bowlerId || derivedCrease?.bowlerId || bowlingSquadIds[0] || "";
 
   const strikerPlayer = playersMap[strikerId];
   const nonStrikerPlayer = playersMap[nonStrikerId];
@@ -325,11 +387,15 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // recorder can consume the user's pick / auto-pick a legal bowler).
   // `ballEvents.length > 0` guard: at the start of an innings there is no
   // "previous over", so squad member #1 must not be flagged as consecutive.
+  // Consecutive-ness is judged against the bowler of the LAST RECORDED BALL
+  // (an over-end pick in the sheet already wrote the NEXT bowler into the
+  // crease state — that must not make the new bowler look consecutive).
+  const lastOverBowlerId = lastBall?.bowlerId || "";
   const eligibleBowlers = bowlingSquadIds.map((pId) => {
     const stat = scorecard.bowlers.find((b) => b.playerId === pId);
     const oversBowled = stat ? stat.legalBalls / 6 : 0;
     const isConsecutive =
-      match.rules.noConsecutiveOvers && ballEvents.length > 0 && bowlerId === pId;
+      match.rules.noConsecutiveOvers && ballEvents.length > 0 && lastOverBowlerId === pId;
     const reachedMax = oversBowled >= match.rules.maxOversPerBowler;
     let ineligibleReason = "";
     if (isConsecutive) ineligibleReason = "Bowled previous over";
@@ -414,72 +480,72 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     );
   }, [strikerStat, legalBallsRemaining, totalPossibleWickets, scorecard.totalWickets]);
 
-  // Auto end check
-  useEffect(() => {
-    // Audience devices never drive innings transitions: a pulled "live +
-    // completed scorecard" match (e.g. the umpire's phone died right after
-    // the completing ball) must NOT make a viewer's write — the transition
-    // arrives with the umpire device's next sync. Guarding here also keeps
-    // the gated saveMatch below from throwing inside this effect.
-    if (!canEdit()) return;
-    if (scorecard.isCompleted && match.status === "live") {
-      // Check if 1st innings just completed
-      if (currentInningsIndex === 0 && match.innings.length === 1) {
-        // Start 2nd innings
-        const nextInnings = {
-          battingTeamId: match.innings[0].bowlingTeamId,
-          bowlingTeamId: match.innings[0].battingTeamId,
-          targetRuns: scorecard.totalRuns + 1,
-          ballEvents: [],
-        };
-        const updatedMatch = {
-          ...match,
-          innings: [...match.innings, nextInnings],
-          currentInningsIndex: 1,
-        };
+  // Auto end check. The actual innings/match completion save is extracted so
+  // the "End now" button on a reopened match can trigger the same path.
+  const applyInningsCompletion = useCallback(() => {
+    if (currentInningsIndex === 0 && match.innings.length === 1) {
+      // Start 2nd innings. The crease state starts empty — the openers sheet
+      // fires for the new innings (openersArmedForRef re-arms on index change).
+      const nextInnings = {
+        battingTeamId: match.innings[0].bowlingTeamId,
+        bowlingTeamId: match.innings[0].battingTeamId,
+        targetRuns: scorecard.totalRuns + 1,
+        ballEvents: [] as BallEvent[],
+      };
+      const updatedMatch = {
+        ...match,
+        innings: [...match.innings, nextInnings],
+        currentInningsIndex: 1,
+      };
+      try {
         db.saveMatch(updatedMatch);
-      } else if (currentInningsIndex >= 1) {
-        // Match completed! Compute result
-        const inn1 = replayInnings(
-          match.innings[0].ballEvents,
-          match.rules,
-          [],
-          [],
-          playersMap
-        );
-        const inn2 = scorecard;
+      } catch (e) {
+        setSaveError(`Couldn't start the 2nd innings — ${explainDbError(e)}`);
+      }
+    } else if (currentInningsIndex >= 1) {
+      // Match completed! Compute result
+      const inn1 = replayInnings(
+        match.innings[0].ballEvents,
+        match.rules,
+        [],
+        [],
+        playersMap
+      );
+      const inn2 = scorecard;
 
-        let resultText = "";
-        let winnerTeamId: string | undefined = undefined;
+      let resultText = "";
+      let winnerTeamId: string | undefined = undefined;
 
-        if (inn2.totalRuns > inn1.totalRuns) {
-          const wicketsRemaining = match.rules.playersPerSide - 1 - inn2.totalWickets;
-          resultText = `${bowlingTeam?.name} chased target to win by ${wicketsRemaining} wicket(s)`;
-          winnerTeamId = currentInningsData.battingTeamId;
-        } else if (inn2.totalRuns < inn1.totalRuns) {
-          const runMargin = inn1.totalRuns - inn2.totalRuns;
-          resultText = `${battingTeam?.name} won by ${runMargin} run(s)`;
-          winnerTeamId = match.innings[0].battingTeamId;
-        } else {
-          resultText = "Match tied!";
-        }
+      if (inn2.totalRuns > inn1.totalRuns) {
+        const wicketsRemaining = match.rules.playersPerSide - 1 - inn2.totalWickets;
+        resultText = `${bowlingTeam?.name || "The chasing team"} chased target to win by ${wicketsRemaining} wicket(s)`;
+        winnerTeamId = currentInningsData.battingTeamId;
+      } else if (inn2.totalRuns < inn1.totalRuns) {
+        const runMargin = inn1.totalRuns - inn2.totalRuns;
+        resultText = `${battingTeam?.name || "The defending team"} won by ${runMargin} run(s)`;
+        winnerTeamId = match.innings[0].battingTeamId;
+      } else {
+        resultText = "Match tied!";
+      }
 
-        const updatedMatch: Match = {
-          ...match,
-          status: "completed",
-          resultText,
-          winnerTeamId,
-        };
+      const updatedMatch: Match = {
+        ...match,
+        status: "completed",
+        resultText,
+        winnerTeamId,
+      };
+      try {
         db.saveMatch(updatedMatch);
         db.logActivity("match_completed", {
           matchId: match.id,
           detail: `completed the match — ${resultText}`,
           after: resultText,
         });
+      } catch (e) {
+        setSaveError(`Couldn't record the result — ${explainDbError(e)}`);
       }
     }
   }, [
-    scorecard.isCompleted,
     currentInningsIndex,
     match,
     scorecard,
@@ -488,6 +554,33 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     currentInningsData.battingTeamId,
     playersMap,
   ]);
+
+  useEffect(() => {
+    // Audience devices never drive innings transitions: a pulled "live +
+    // completed scorecard" match (e.g. the umpire's phone died right after
+    // the completing ball) must NOT make a viewer's write — the transition
+    // arrives with the umpire device's next sync. Guarding here also keeps
+    // the gated saveMatch below from throwing inside this effect.
+    if (!canEdit()) return;
+    if (scorecard.isCompleted && match.status === "live") {
+      // Reopen guard (1.4.7-test-3): a reopened match MOUNTS with an already-complete
+      // innings. Completing it again before the user has corrected anything
+      // would instantly re-lock the match (the reported "reopen does nothing"
+      // bug). Wait for an actual edit this session; the reading zone shows an
+      // "End now" button for a deliberate finish.
+      if (!sessionEditedRef.current) return;
+      applyInningsCompletion();
+    }
+  }, [
+    scorecard.isCompleted,
+    applyInningsCompletion,
+    match,
+  ]);
+
+  /** True when the innings stands complete but the auto-end is holding off
+   *  (reopened match, no edits yet) — drives the notice + "End now" button. */
+  const showReopenNotice =
+    scorecard.isCompleted && match.status === "live" && !sessionEditedRef.current;
 
   // Check for end of over prompt (6 legal balls reached)
   const isOverComplete =
@@ -533,6 +626,14 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // tapper could otherwise fire recordBall twice against the SAME stale
   // snapshot — both balls got the same id/seq and overwrote each other, which
   // made the pad silently swallow taps (the "screen hangs" report).
+  //
+  // CREASE RULE (1.4.7-test-3): who is on strike / who is bowling comes from the
+  // persisted innings state first (written by every previous action), then
+  // the event-log derivation (pre-1.4.7-test-3 matches), then squad defaults. After
+  // the ball, the ROTATED state (odd-run swap, over-end swap, incoming
+  // batter, chosen bowler) is written BACK to the innings — this is the fix
+  // for "batsman and bowler never change": the rotation used to be computed
+  // and thrown away.
   const recordBall = useCallback(
     (
       runsBat: number,
@@ -571,35 +672,49 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         liveInn.isSuperOver
       );
       const liveLastBall = liveEvents[liveEvents.length - 1];
-      const liveStrikerId = liveLastBall?.strikerId || liveBattingSquadIds[0] || "";
-      const liveNonStrikerId = liveLastBall?.nonStrikerId || liveBattingSquadIds[1] || "";
-      const liveBowlerId = liveLastBall?.bowlerId || liveBowlingSquadIds[0] || "";
+      const liveCrease = deriveLiveCrease(
+        liveEvents,
+        liveMatch.rules,
+        liveBattingSquadIds,
+        liveBowlingSquadIds
+      );
+      const liveStrikerId =
+        liveInn.strikerId || liveCrease?.strikerId || liveBattingSquadIds[0] || "";
+      const liveNonStrikerId =
+        liveInn.nonStrikerId || liveCrease?.nonStrikerId || liveBattingSquadIds[1] || "";
+      const liveBowlerId =
+        liveInn.bowlerId || liveCrease?.bowlerId || liveBowlingSquadIds[0] || "";
+      // The bowler of the last RECORDED ball — the consecutive-over rule
+      // judges against this, not the crease state (which may already hold
+      // the user's pick for the coming over).
+      const prevOverBowlerId = liveLastBall?.bowlerId || "";
 
       const isLegal = extraType !== "wide" && extraType !== "no_ball";
-      const isFreeHit = liveLastBall ? liveLastBall.extraType === "no_ball" : false;
+      const isFreeHit =
+        !!liveMatch.rules.freeHitOnNoBall && liveLastBall ? liveLastBall.extraType === "no_ball" : false;
       const nextSeq = liveEvents.length + 1;
       const overNum = Math.floor(liveSc.legalBallsCount / 6);
       const ballInOver = (liveSc.legalBallsCount % 6) + 1;
 
       // Bowler for this ball:
       // - An explicit pick from the bowler sheet (over-end choice, or a
-      //   mid-over tactical change from More Actions) always wins, once.
+      //   mid-over tactical change) always wins — it is ALSO persisted on
+      //   the innings state by handleSelectNextBowler, so it survives
+      //   screen remounts; the state fallback below covers that case too.
       // - Otherwise, on the first ball of a new over, auto-pick the first
       //   eligible squad bowler so a quota-locked / just-finished bowler is
       //   never silently re-credited with the next over.
-      // - Mid-over continuity falls back to the bowler of the previous ball.
+      // - Mid-over continuity falls back to the crease state's bowler.
       // Eligibility is recomputed from the LIVE scorecard, not the stale one.
       const isNewOverStart = liveSc.legalBallsCount % 6 === 0;
-      let effectiveBowlerId = liveBowlerId;
-      if (selectedNextBowlerId) {
-        effectiveBowlerId = selectedNextBowlerId;
-      } else if (isNewOverStart) {
+      let effectiveBowlerId = selectedNextBowlerId || liveBowlerId;
+      if (!selectedNextBowlerId && isNewOverStart) {
         const autoPick = liveBowlingSquadIds
           .map((pId) => {
             const stat = liveSc.bowlers.find((b) => b.playerId === pId);
             const oversBowled = stat ? stat.legalBalls / 6 : 0;
             const isConsecutive =
-              liveMatch.rules.noConsecutiveOvers && liveEvents.length > 0 && liveBowlerId === pId;
+              liveMatch.rules.noConsecutiveOvers && liveEvents.length > 0 && prevOverBowlerId === pId;
             const reachedMax = oversBowled >= liveMatch.rules.maxOversPerBowler;
             return { playerId: pId, isEligible: !isConsecutive && !reachedMax };
           })
@@ -633,37 +748,43 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         commentaryText: commentary,
       };
 
-      // Determine next striker / non-striker
+      // Determine next striker / non-striker (the crease AFTER this ball)
       let nextStriker = liveStrikerId;
       let nextNonStriker = liveNonStrikerId;
 
-      // Strike rotation logic:
-      // Odd runs swap strike
+      // Strike rotation logic: odd runs completed swap strike.
       const runsCompleted = wicket ? wicket.runsCompleted : runsBat;
       const totalRunsRan = runsCompleted + (extraType === "bye" || extraType === "leg_bye" ? extraRuns : 0);
       const shouldSwapStrike = totalRunsRan % 2 !== 0;
 
-      if (shouldSwapStrike) {
+      if (shouldSwapStrike && nextStriker && nextNonStriker) {
         const tmp = nextStriker;
         nextStriker = nextNonStriker;
         nextNonStriker = tmp;
       }
 
-      // If wicket fell, assign next batter
+      // If a wicket fell, the incoming batter replaces the DISMISSED player
+      // wherever they sit AFTER the run swap (batters cross on odd runs, so
+      // a run-out non-striker can end up at the striker's end).
       if (wicket && selectedNextBatterId) {
-        if (wicket.dismissedEnd === "striker" || wicket.dismissedPlayerId === liveStrikerId) {
+        const dismissedId = wicket.dismissedPlayerId;
+        if (dismissedId === nextStriker) {
+          nextStriker = selectedNextBatterId;
+        } else if (dismissedId === nextNonStriker) {
+          nextNonStriker = selectedNextBatterId;
+        } else if (wicket.dismissedEnd === "striker") {
           nextStriker = selectedNextBatterId;
         } else {
           nextNonStriker = selectedNextBatterId;
         }
       }
 
-      // Check if over ends after this legal ball
+      // Check if over ends after this legal ball — ends swap too (not with
+      // last-man-batting: there is no partner to swap with).
       const newLegalBallsCount = liveSc.legalBallsCount + (isLegal ? 1 : 0);
       const isEndOfOver = isLegal && newLegalBallsCount % 6 === 0;
 
-      if (isEndOfOver && !liveMatch.rules.lastManBatting) {
-        // Switch ends at over end
+      if (isEndOfOver && !liveMatch.rules.lastManBatting && nextStriker && nextNonStriker) {
         const tmp = nextStriker;
         nextStriker = nextNonStriker;
         nextNonStriker = tmp;
@@ -674,6 +795,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       updatedInnings[liveInnIdx] = {
         ...liveInn,
         ballEvents: updatedEvents,
+        // Persist the rotated crease + this ball's bowler — the actual fix
+        // for the striker/bowler never changing.
+        strikerId: nextStriker,
+        nonStrikerId: nextNonStriker,
+        bowlerId: effectiveBowlerId,
       };
 
       const updatedMatch: Match = {
@@ -681,7 +807,15 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         innings: updatedInnings,
       };
 
-      db.saveMatch(updatedMatch);
+      try {
+        db.saveMatch(updatedMatch);
+      } catch (e) {
+        // Never crash the pad on a gated save (session expired mid-match,
+        // match completed elsewhere): show exactly what happened instead.
+        setSaveError(`Couldn't record the ball — ${explainDbError(e)}`);
+        return;
+      }
+      sessionEditedRef.current = true;
 
       // Activity log (1.4.7): every scoring action, attributed + readable.
       db.logActivity("ball_scored", {
@@ -732,6 +866,9 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
   // Undo last ball — live db read so rapid undos remove exactly one ball
   // per tap (React state is async and would otherwise replay the same slice).
+  // The crease BEFORE the removed ball is exactly who faced/bowled that
+  // ball — restore it into the innings state so the next ball keeps the
+  // right striker/non-striker/bowler.
   const handleUndo = () => {
     if (!canEdit()) return; // audience — the pad is disabled, belt & braces
     const liveMatch = db.getMatch(matchId);
@@ -741,8 +878,20 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     const removed = liveInn.ballEvents[liveInn.ballEvents.length - 1];
     const updatedEvents = liveInn.ballEvents.slice(0, -1);
     const updatedInnings = [...liveMatch.innings];
-    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updatedEvents };
-    db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    updatedInnings[liveMatch.currentInningsIndex] = {
+      ...liveInn,
+      ballEvents: updatedEvents,
+      strikerId: removed.strikerId,
+      nonStrikerId: removed.nonStrikerId,
+      bowlerId: removed.bowlerId,
+    };
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    } catch (e) {
+      setSaveError(`Couldn't undo — ${explainDbError(e)}`);
+      return;
+    }
+    sessionEditedRef.current = true;
     db.logActivity("ball_removed", {
       matchId,
       detail: `undid the last ball — ${ballSentence(removed)}`,
@@ -752,21 +901,42 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     triggerHaptic("undo");
   };
 
-  // Swap striker manually (live db read — same stale-state guard as undo)
+  // Swap striker manually. 1.4.7-test-3: this now flips the PERSISTED crease state
+  // only — the old implementation rewrote the last ball's strikerId, which
+  // corrupted the scorecard replay (the last ball was re-attributed to the
+  // other batter).
   const handleSwapStriker = () => {
     if (!canEdit()) return;
     const liveMatch = db.getMatch(matchId);
     if (!liveMatch || liveMatch.status !== "live") return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
-    if (!liveInn || liveInn.ballEvents.length === 0) return;
-    const last = { ...liveInn.ballEvents[liveInn.ballEvents.length - 1] };
-    const tmp = last.strikerId;
-    last.strikerId = last.nonStrikerId;
-    last.nonStrikerId = tmp;
-    const updated = [...liveInn.ballEvents.slice(0, -1), last];
+    if (!liveInn) return;
+    const liveEvents = liveInn.ballEvents;
+    const batSquad =
+      liveInn.battingTeamId === liveMatch.teamAId
+        ? liveMatch.teamAPlayerIds
+        : liveMatch.teamBPlayerIds;
+    const bowlSquad =
+      liveInn.bowlingTeamId === liveMatch.teamAId
+        ? liveMatch.teamAPlayerIds
+        : liveMatch.teamBPlayerIds;
+    const crease = deriveLiveCrease(liveEvents, liveMatch.rules, batSquad, bowlSquad);
+    const sId = liveInn.strikerId || crease?.strikerId || batSquad[0] || "";
+    const nsId = liveInn.nonStrikerId || crease?.nonStrikerId || batSquad[1] || "";
+    if (!sId || !nsId) return; // last-man batting — nothing to swap
     const updatedInnings = [...liveMatch.innings];
-    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updated };
-    db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    updatedInnings[liveMatch.currentInningsIndex] = {
+      ...liveInn,
+      strikerId: nsId,
+      nonStrikerId: sId,
+    };
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    } catch (e) {
+      setSaveError(`Couldn't swap strike — ${explainDbError(e)}`);
+      return;
+    }
+    sessionEditedRef.current = true;
     db.logActivity("striker_swapped", {
       matchId,
       detail: "swapped striker and non-striker",
@@ -775,14 +945,78 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     triggerHaptic("light");
   };
 
-  // Bowler assignment
+  // Bowler assignment. 1.4.7-test-3: the pick is persisted onto the innings state
+  // IMMEDIATELY — the bowler strip updates at once (the "bowler never
+  // changed" bug) and the choice survives a screen remount. The next ball
+  // records it onto its event.
   const handleSelectNextBowler = (bId: string) => {
     setSelectedNextBowlerId(bId);
     setShowNextBowlerSheet(false);
+    if (!canEdit()) return;
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch || liveMatch.status !== "live") return;
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn) return;
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, bowlerId: bId };
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+      db.logActivity("bowler_changed", {
+        matchId,
+        detail: `set ${playersMap[bId]?.name || "the bowler"} to bowl the next over`,
+      });
+    } catch (e) {
+      setSaveError(`Couldn't set the bowler — ${explainDbError(e)}`);
+    }
   };
 
-  // Wicket sheet confirmation
+  // Wicket sheet confirmation. `replacementOnly` mode (legacy pre-1.4.7-test-3
+  // matches whose log ends on a wicket) only sets the crease — no new ball.
   const handleConfirmWicket = () => {
+    if (replacementOnly) {
+      if (!selectedNextBatterId) return;
+      if (!canEdit()) {
+        resetWicketSheet();
+        return;
+      }
+      const liveMatch = db.getMatch(matchId);
+      if (!liveMatch || liveMatch.status !== "live") {
+        resetWicketSheet();
+        return;
+      }
+      const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+      const last = liveInn?.ballEvents[liveInn.ballEvents.length - 1];
+      if (!liveInn || !last?.wicket) {
+        resetWicketSheet();
+        return;
+      }
+      let striker = liveInn.strikerId || last.strikerId;
+      let nonStriker = liveInn.nonStrikerId || last.nonStrikerId;
+      const dismissedId = last.wicket.dismissedPlayerId;
+      if (dismissedId === striker) striker = selectedNextBatterId;
+      else nonStriker = selectedNextBatterId;
+      const updatedInnings = [...liveMatch.innings];
+      updatedInnings[liveMatch.currentInningsIndex] = {
+        ...liveInn,
+        strikerId: striker,
+        nonStrikerId: nonStriker,
+      };
+      try {
+        db.saveMatch({ ...liveMatch, innings: updatedInnings });
+      } catch (e) {
+        setSaveError(`Couldn't set the incoming batter — ${explainDbError(e)}`);
+        return;
+      }
+      sessionEditedRef.current = true;
+      db.logActivity("crease_set", {
+        matchId,
+        detail: `set ${playersMap[selectedNextBatterId]?.name || "the incoming batter"} at the crease (recorded before crease tracking)`,
+        correction: true,
+      });
+      resetWicketSheet();
+      return;
+    }
+
     const isRunOut = selectedWicketType === "run_out";
     const dismissedId = isRunOut
       ? dismissedBatterId || strikerId
@@ -797,13 +1031,20 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     };
 
     recordBall(runOutCompletedRuns, "none", 0, wicketInfo);
+    resetWicketSheet();
+  };
+
+  const resetWicketSheet = () => {
     setShowWicketSheet(false);
     // Reset state
     setWicketStep("type");
     setSelectedWicketType("bowled");
     setSelectedFielderIds([]);
     setDismissedBatterId("");
+    setDismissedEnd("striker");
+    setRunOutCompletedRuns(0);
     setSelectedNextBatterId("");
+    setReplacementOnly(false);
   };
 
   // Save wagon wheel shot direction (live db read — the pending ball is
@@ -819,9 +1060,107 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     );
     const updatedInnings = [...liveMatch.innings];
     updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updatedEvents };
-    db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    } catch (e) {
+      setSaveError(`Couldn't save the shot direction — ${explainDbError(e)}`);
+      return;
+    }
+    sessionEditedRef.current = true;
     setShowWagonWheelModal(false);
     setPendingWagonBall(null);
+  };
+
+  // Delete a specific ball from the log (live db read so the edit always
+  // applies to the newest state). When the LAST ball is deleted, the crease
+  // rolls back to whoever faced/bowled that ball (same rule as Undo).
+  const handleDeleteBall = (ball: BallEvent) => {
+    if (!canEdit()) return; // audience (1.4.7)
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch || liveMatch.status !== "live") return;
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn) return;
+    const isLast = liveInn.ballEvents[liveInn.ballEvents.length - 1]?.id === ball.id;
+    const updated = liveInn.ballEvents.filter((b) => b.id !== ball.id);
+    if (updated.length === liveInn.ballEvents.length) return; // already gone
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = {
+      ...liveInn,
+      ballEvents: updated,
+      ...(isLast
+        ? {
+            strikerId: ball.strikerId,
+            nonStrikerId: ball.nonStrikerId,
+            bowlerId: ball.bowlerId,
+          }
+        : {}),
+    };
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    } catch (e) {
+      setSaveError(`Couldn't delete the ball — ${explainDbError(e)}`);
+      return;
+    }
+    sessionEditedRef.current = true;
+    db.logActivity("ball_removed", {
+      matchId,
+      detail: `deleted a ball from the log — ${ballSentence(ball)}`,
+      before: ballSentence(ball),
+      correction: true,
+    });
+  };
+
+  // Confirm the start-of-innings crease (openers + opening bowler).
+  const handleConfirmOpeners = () => {
+    if (!canEdit()) {
+      setShowOpenersSheet(false);
+      return;
+    }
+    const liveMatch = db.getMatch(matchId);
+    if (!liveMatch || liveMatch.status !== "live") {
+      setShowOpenersSheet(false);
+      return;
+    }
+    const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
+    if (!liveInn) {
+      setShowOpenersSheet(false);
+      return;
+    }
+    const batSquad =
+      liveInn.battingTeamId === liveMatch.teamAId
+        ? liveMatch.teamAPlayerIds
+        : liveMatch.teamBPlayerIds;
+    const bowlSquad =
+      liveInn.bowlingTeamId === liveMatch.teamAId
+        ? liveMatch.teamAPlayerIds
+        : liveMatch.teamBPlayerIds;
+    let striker = openersStrikerId || batSquad[0] || "";
+    let nonStriker = openersNonStrikerId || batSquad[1] || "";
+    // Never allow the same player at both ends — fall back to squad order.
+    if (nonStriker === striker) {
+      nonStriker = batSquad.find((id) => id !== striker) || "";
+    }
+    const bowler = openersBowlerId || bowlSquad[0] || "";
+    const updatedInnings = [...liveMatch.innings];
+    updatedInnings[liveMatch.currentInningsIndex] = {
+      ...liveInn,
+      strikerId: striker,
+      nonStrikerId: nonStriker,
+      bowlerId: bowler,
+    };
+    try {
+      db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    } catch (e) {
+      setSaveError(`Couldn't set the openers — ${explainDbError(e)}`);
+      return; // keep the sheet open so the user can retry
+    }
+    db.logActivity("innings_setup", {
+      matchId,
+      detail: `set ${playersMap[striker]?.name || "the striker"} and ${
+        playersMap[nonStriker]?.name || "the non-striker"
+      } to open, ${playersMap[bowler]?.name || "the first bowler"} with the ball`,
+    });
+    setShowOpenersSheet(false);
   };
 
   // Eligible next batters (those in squad who haven't batted yet)
@@ -849,6 +1188,68 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   const padEnabled = isMatchLive && canScore;
 
   const isLeftHandPad = settings.padHand === "left";
+
+  // ── Start-of-innings prompt (1.4.7-test-3) ─────────────────────────────────────
+  // A brand-new innings has no crease state: ask once for the opening pair
+  // + opening bowler instead of silently defaulting to squad order (which
+  // credited the wrong batters/bowler until the user noticed).
+  useEffect(() => {
+    if (!padEnabled) return;
+    const inningsEmpty = ballEvents.length === 0;
+    const hasState = !!(currentInningsData.strikerId || currentInningsData.nonStrikerId);
+    if (inningsEmpty && !hasState) {
+      if (openersArmedForRef.current === currentInningsIndex) return; // already asked
+      openersArmedForRef.current = currentInningsIndex;
+      setOpenersStrikerId(battingSquadIds[0] || "");
+      setOpenersNonStrikerId(battingSquadIds[1] || "");
+      setOpenersBowlerId(bowlingSquadIds[0] || "");
+      setShowOpenersSheet(true);
+    } else if (!inningsEmpty) {
+      openersArmedForRef.current = null; // re-arm for the next innings
+    }
+  }, [
+    padEnabled,
+    ballEvents.length,
+    currentInningsIndex,
+    currentInningsData.strikerId,
+    currentInningsData.nonStrikerId,
+    battingSquadIds,
+    bowlingSquadIds,
+  ]);
+
+  // ── Legacy-data rescue (1.4.7-test-3) ──────────────────────────────────────────
+  // A pre-1.4.7-test-3 event log that ends on a wicket never recorded who came in.
+  // Ask once, then persist the crease (no new ball is recorded).
+  useEffect(() => {
+    const legacyPendingBatter =
+      ballEvents.length > 0 &&
+      !currentInningsData.strikerId &&
+      !!lastBall?.wicket &&
+      lastBall.wicket.type !== "retired_hurt" &&
+      !scorecard.isCompleted;
+    if (
+      legacyPendingBatter &&
+      !incomingArmedRef.current &&
+      !showWicketSheet &&
+      !showOpenersSheet
+    ) {
+      incomingArmedRef.current = true;
+      setWicketStep("next_batter");
+      setReplacementOnly(true);
+      setSelectedNextBatterId("");
+      setShowWicketSheet(true);
+    }
+    if (!legacyPendingBatter) {
+      incomingArmedRef.current = false;
+    }
+  }, [
+    ballEvents.length,
+    currentInningsData.strikerId,
+    lastBall,
+    scorecard.isCompleted,
+    showWicketSheet,
+    showOpenersSheet,
+  ]);
 
   // Shared label styles (web: text-xs/[11px] uppercase tracking-wider text-ink-2 …)
   const zoneLabel = {
@@ -938,6 +1339,55 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         </View>
       </View>
 
+      {/* Save-error banner (1.4.7-test-3): failed writes are explained, never
+          silent, never a crash. Fixed under the header so it stays visible
+          while the pad scrolls. */}
+      {saveError ? (
+        <View
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            padding: 12,
+            borderWidth: 1,
+            borderRadius: 10,
+            borderColor: colors.warning,
+            backgroundColor: colors.surface,
+            flexDirection: "row",
+            alignItems: "flex-start",
+            gap: 8,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                fontSize: 12,
+                fontFamily: FONTS.sansSemiBold,
+                color: colors.warning,
+              }}
+            >
+              Couldn't save
+            </Text>
+            <Text
+              style={{
+                fontSize: 12,
+                fontFamily: FONTS.sans,
+                color: colors.ink,
+                marginTop: 2,
+              }}
+            >
+              {saveError}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => setSaveError(null)}
+            hitSlop={8}
+            accessibilityLabel="Dismiss error"
+          >
+            <X size={16} color={colors.ink2} />
+          </Pressable>
+        </View>
+      ) : null}
+
       {/* Main Scoring Area */}
       <ScrollView
         style={{ flex: 1, width: "100%" }}
@@ -952,6 +1402,59 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       >
         {/* Upper Reading Zone */}
         <View style={{ flexDirection: "column", width: "100%", paddingHorizontal: 16, paddingTop: 8 }}>
+          {/* Reopen notice (1.4.7-test-3): the innings is complete but the match is
+              live again — the auto-end holds off until the user actually
+              edits something, so a correction session is never instantly
+              re-locked. */}
+          {showReopenNotice ? (
+            <View
+              style={{
+                width: "100%",
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.warning,
+                borderRadius: 10,
+                padding: 12,
+                marginBottom: 8,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontFamily: FONTS.sansSemiBold,
+                    color: colors.warning,
+                  }}
+                >
+                  Innings complete — match reopened
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontFamily: FONTS.sans,
+                    color: colors.ink2,
+                    marginTop: 2,
+                  }}
+                >
+                  Correct it from the Ball Log, or finish the match for good.
+                </Text>
+              </View>
+              <GullyButton
+                variant="primary"
+                size="sm"
+                onPress={() => {
+                  sessionEditedRef.current = true;
+                  applyInningsCompletion();
+                }}
+              >
+                End now
+              </GullyButton>
+            </View>
+          ) : null}
           {/* Score as Hero */}
           <ScoreOdometer
             runs={scorecard.totalRuns}
@@ -1469,6 +1972,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
             <Pressable
               onPress={() => {
                 setWicketStep("type");
+                setReplacementOnly(false);
+                setSelectedFielderIds([]);
+                setDismissedBatterId("");
+                setDismissedEnd("striker");
+                setRunOutCompletedRuns(0);
+                setSelectedNextBatterId("");
                 setShowWicketSheet(true);
               }}
               style={({ pressed }) => ({
@@ -1533,8 +2042,13 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       {/* --- PROGRESSIVE WICKET SHEET --- */}
       <GullySheet
         isOpen={showWicketSheet}
-        onClose={() => setShowWicketSheet(false)}
-        title="Record Dismissal"
+        onClose={() => {
+          // Dismissing mid-flow is a cancel: clear the selections so a
+          // later wicket doesn't inherit stale fielders/batters, and never
+          // leave replacementOnly armed.
+          resetWicketSheet();
+        }}
+        title={replacementOnly ? "Set the Crease" : "Record Dismissal"}
       >
         {wicketStep === "type" && (
           <View style={{ flexDirection: "column", gap: 12 }}>
@@ -1568,17 +2082,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                           opt.type === "stumped"
                         ) {
                           setWicketStep("fielder");
-                        } else if (opt.type === "retired_hurt") {
-                          // Retired hurt doesn't count as a wicket
-                          recordBall(0, "none", 0, {
-                            type: "retired_hurt",
-                            dismissedPlayerId: strikerId,
-                            dismissedEnd: "striker",
-                            fielderIds: [],
-                            runsCompleted: 0,
-                          });
-                          setShowWicketSheet(false);
                         } else {
+                          // Every dismissal — including Retired Hurt — needs
+                          // a replacement at the crease (the retired batter
+                          // stays available to return later since retired-hurt
+                          // is not out). The old flow recorded the ball with
+                          // the retired batter STILL at the crease.
                           setWicketStep("next_batter");
                         }
                       }}
@@ -1801,7 +2310,17 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
         {wicketStep === "next_batter" && (
           <View style={{ flexDirection: "column", gap: 12 }}>
-            <Text style={sheetLabel}>Select Incoming Batter</Text>
+            <Text style={sheetLabel}>
+              {selectedWicketType === "retired_hurt"
+                ? "Who replaces the retired batter?"
+                : "Select Incoming Batter"}
+            </Text>
+            {selectedWicketType === "retired_hurt" ? (
+              <Text style={{ fontSize: 11, color: colors.ink2, fontFamily: FONTS.sans }}>
+                Retired hurt is not out — {strikerPlayer?.name || "the batter"} can come back
+                later. The replacement takes the crease now.
+              </Text>
+            ) : null}
             <ScrollView
               style={{ maxHeight: 224 }}
               contentContainerStyle={{ flexDirection: "column", gap: 6 }}
@@ -1862,11 +2381,15 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
             <GullyButton
               variant="accent"
               fullWidth
-              disabled={availableNextBatters.length > 0 && !selectedNextBatterId}
+              disabled={
+                !replacementOnly &&
+                availableNextBatters.length > 0 &&
+                !selectedNextBatterId
+              }
               onPress={handleConfirmWicket}
               style={{ marginTop: 8 }}
             >
-              Confirm Wicket
+              {replacementOnly ? "Set the Crease" : "Confirm Wicket"}
             </GullyButton>
           </View>
         )}
@@ -1991,28 +2514,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                     <Pressable
-                      onPress={() => {
-                        // Delete this specific ball and recompute (live db read
-                        // so the edit always applies to the newest state)
-                        if (!canEdit()) return; // audience (1.4.7)
-                        const liveMatch = db.getMatch(matchId);
-                        if (!liveMatch) return;
-                        const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
-                        if (!liveInn) return;
-                        const updated = liveInn.ballEvents.filter((b) => b.id !== ball.id);
-                        const updatedInnings = [...liveMatch.innings];
-                        updatedInnings[liveMatch.currentInningsIndex] = {
-                          ...liveInn,
-                          ballEvents: updated,
-                        };
-                        db.saveMatch({ ...liveMatch, innings: updatedInnings });
-                        db.logActivity("ball_removed", {
-                          matchId,
-                          detail: `deleted a ball from the log — ${ballSentence(ball)}`,
-                          before: ballSentence(ball),
-                          correction: true,
-                        });
-                      }}
+                      onPress={() => handleDeleteBall(ball)}
                       style={({ pressed }) => ({
                         paddingHorizontal: 8,
                         paddingVertical: 4,
@@ -2164,12 +2666,27 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
               Enter Custom Runs
             </Text>
             <GullyTextField
-              label="Runs Scored"
+              label="Runs Scored (0–36)"
               value={customRunsValue}
-              onChangeText={setCustomRunsValue}
+              onChangeText={(t) => {
+                setCustomRunsValue(t.replace(/[^0-9]/g, ""));
+                setCustomRunsError(null);
+              }}
               keyboardType="number-pad"
               tabular
             />
+            {customRunsError ? (
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: colors.warning,
+                  fontFamily: FONTS.sans,
+                  marginTop: 6,
+                }}
+              >
+                {customRunsError}
+              </Text>
+            ) : null}
             <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
               <GullyButton
                 variant="quiet"
@@ -2182,7 +2699,14 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                 variant="primary"
                 fullWidth
                 onPress={() => {
-                  const runs = parseInt(customRunsValue, 10) || 0;
+                  const runs = parseInt(customRunsValue, 10);
+                  if (isNaN(runs) || runs < 0 || runs > 36) {
+                    setCustomRunsError(
+                      "Enter a number between 0 and 36 (5 and 7 are the usual all-run cases)."
+                    );
+                    return;
+                  }
+                  setCustomRunsError(null);
                   recordBall(runs);
                   setShowCustomRunsModal(false);
                 }}
@@ -2475,6 +2999,185 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                 On track for {strikerMilestone.nextMilestone} milestone in ~{strikerMilestone.estimatedBallsToMilestone || "-"} balls ({strikerMilestone.probabilityOfMilestone}% probability based on strike rate).
               </Text>
             )}
+          </View>
+        </View>
+      </GullySheet>
+
+      {/* --- START OF INNINGS: OPENERS + OPENING BOWLER SHEET (1.4.7-test-3) --- */}
+      <GullySheet
+        isOpen={showOpenersSheet}
+        onClose={() => setShowOpenersSheet(false)}
+        title="Start of Innings — Set the Crease"
+      >
+        <View style={{ flexDirection: "column", gap: 12 }}>
+          <Text style={{ fontSize: 11, color: colors.ink2, fontFamily: FONTS.sans }}>
+            Who opens the batting for {battingTeam?.name || "the batting team"}, and who takes the
+            new ball for {bowlingTeam?.name || "the bowling team"}? Close this sheet to use the
+            squad-order defaults.
+          </Text>
+
+          <View>
+            <Text style={sheetLabel}>Striker (takes the first ball)</Text>
+            <ScrollView
+              style={{ maxHeight: 132, marginTop: 6 }}
+              contentContainerStyle={{ flexDirection: "column", gap: 6 }}
+              nestedScrollEnabled
+            >
+              {battingSquadIds.map((pId) => {
+                const p = playersMap[pId];
+                const isSelected = openersStrikerId === pId;
+                return (
+                  <Pressable
+                    key={pId}
+                    onPress={() => {
+                      setOpenersStrikerId(pId);
+                      // Keep the two ends distinct when possible.
+                      if (openersNonStrikerId === pId) {
+                        setOpenersNonStrikerId(
+                          battingSquadIds.find((id) => id !== pId) || ""
+                        );
+                      }
+                    }}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: 10,
+                      borderWidth: 1,
+                      borderRadius: 10,
+                      opacity: pressed ? 0.85 : 1,
+                      ...(isSelected
+                        ? {
+                            borderColor: colors.accent,
+                            backgroundColor: colors.accentSubtle,
+                          }
+                        : { borderColor: colors.hairline }),
+                    })}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: FONTS.sans,
+                        fontSize: 14,
+                        color: colors.ink,
+                        fontWeight: isSelected ? "500" : "400",
+                      }}
+                    >
+                      {p?.name || "Player"}
+                    </Text>
+                    {isSelected && <Check size={16} color={colors.accent} />}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          <View>
+            <Text style={sheetLabel}>Non-Striker</Text>
+            <ScrollView
+              style={{ maxHeight: 132, marginTop: 6 }}
+              contentContainerStyle={{ flexDirection: "column", gap: 6 }}
+              nestedScrollEnabled
+            >
+              {battingSquadIds
+                .filter((pId) => pId !== openersStrikerId)
+                .map((pId) => {
+                  const p = playersMap[pId];
+                  const isSelected = openersNonStrikerId === pId;
+                  return (
+                    <Pressable
+                      key={pId}
+                      onPress={() => setOpenersNonStrikerId(pId)}
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: 10,
+                        borderWidth: 1,
+                        borderRadius: 10,
+                        opacity: pressed ? 0.85 : 1,
+                        ...(isSelected
+                          ? {
+                              borderColor: colors.accent,
+                              backgroundColor: colors.accentSubtle,
+                            }
+                          : { borderColor: colors.hairline }),
+                      })}
+                    >
+                      <Text
+                        style={{
+                          fontFamily: FONTS.sans,
+                          fontSize: 14,
+                          color: colors.ink,
+                          fontWeight: isSelected ? "500" : "400",
+                        }}
+                      >
+                        {p?.name || "Player"}
+                      </Text>
+                      {isSelected && <Check size={16} color={colors.accent} />}
+                    </Pressable>
+                  );
+                })}
+            </ScrollView>
+          </View>
+
+          <View>
+            <Text style={sheetLabel}>Opening Bowler</Text>
+            <ScrollView
+              style={{ maxHeight: 132, marginTop: 6 }}
+              contentContainerStyle={{ flexDirection: "column", gap: 6 }}
+              nestedScrollEnabled
+            >
+              {bowlingSquadIds.map((pId) => {
+                const p = playersMap[pId];
+                const isSelected = openersBowlerId === pId;
+                return (
+                  <Pressable
+                    key={pId}
+                    onPress={() => setOpenersBowlerId(pId)}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: 10,
+                      borderWidth: 1,
+                      borderRadius: 10,
+                      opacity: pressed ? 0.85 : 1,
+                      ...(isSelected
+                        ? {
+                            borderColor: colors.accent,
+                            backgroundColor: colors.accentSubtle,
+                          }
+                        : { borderColor: colors.hairline }),
+                    })}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: FONTS.sans,
+                        fontSize: 14,
+                        color: colors.ink,
+                        fontWeight: isSelected ? "500" : "400",
+                      }}
+                    >
+                      {p?.name || "Player"}
+                    </Text>
+                    {isSelected && <Check size={16} color={colors.accent} />}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            <GullyButton
+              variant="quiet"
+              fullWidth
+              onPress={() => setShowOpenersSheet(false)}
+            >
+              Use Defaults
+            </GullyButton>
+            <GullyButton variant="primary" fullWidth onPress={handleConfirmOpeners}>
+              Start Innings
+            </GullyButton>
           </View>
         </View>
       </GullySheet>

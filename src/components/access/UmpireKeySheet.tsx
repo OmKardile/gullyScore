@@ -21,6 +21,7 @@ import { db } from "../../storage/db";
 import {
   generateUmpireKey,
   getAccessState,
+  getLastUmpireName,
   subscribeAccess,
 } from "../../storage/access";
 
@@ -66,7 +67,10 @@ export const UmpireKeySheet: React.FC<UmpireKeySheetProps> = ({
         }
       }
       setKeyInput(pregenerated);
-      setNameInput(access.session?.name || "");
+      // Prefill with the last name typed on THIS device (1.4.7-test-3) —
+      // the field stays required, editable and visible every time; the
+      // name is never reused without the person seeing it in the sheet.
+      setNameInput(getLastUmpireName() || "");
       setStay12h(access.stayFor12h);
       setError("");
       setRevealedKey(null);

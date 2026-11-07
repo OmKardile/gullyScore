@@ -5,7 +5,7 @@
  * Tapping a fixture opens match setup pre-filled.
  */
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Fixture, MatchRules, Tournament } from "../../types/cricket";
@@ -58,6 +58,18 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
     () => subscribeAccess(() => setCanEdit(getAccessState().mode !== "audience")),
     []
   );
+  // Keep every list in this screen live: a cloud-synced result (another
+  // umpire finishing a match) or a local edit elsewhere must refresh the
+  // fixtures/tables without waiting for a tab remount.
+  const [, setRevision] = useState(0);
+  useEffect(
+    () =>
+      db.subscribe(() => {
+        refreshTournamentsRef.current();
+        setRevision((r) => r + 1);
+      }),
+    []
+  );
   const [tournaments, setTournaments] = useState<Tournament[]>(() => db.getTournaments());
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(() => tournaments[0] || null);
   const [activeTab, setActiveTab] = useState<"fixtures" | "table" | "predictions" | "stats">("fixtures");
@@ -83,7 +95,7 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
   const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
   const [tourneyOvers, setTourneyOvers] = useState<number>(8);
 
-  const teams = db.getTeams();
+  const teams = db.getTeams().filter((t) => !t.isArchived);
   const matches = db.getMatches();
   // Memoize the filtered fixture list: the raw filter returned a NEW array
   // every render, so the simulation useMemo (800-iteration Monte Carlo) below
@@ -100,22 +112,46 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
   const refreshTournaments = () => {
     const list = db.getTournaments();
     setTournaments(list);
-    if (selectedTournament) {
-      const updated = db.getTournament(selectedTournament.id);
-      if (updated) setSelectedTournament(updated);
-    }
+    setSelectedTournament((prev) => {
+      if (!prev) return list[0] || null;
+      const updated = db.getTournament(prev.id);
+      // A remotely tombstoned tournament must not linger as selected.
+      return updated || list[0] || null;
+    });
   };
+  // Stable ref so the db subscription above can call the latest closure.
+  const refreshTournamentsRef = useRef(refreshTournaments);
+  refreshTournamentsRef.current = refreshTournaments;
+
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreateTournament = () => {
     if (!canEdit) return; // audience (1.4.7)
+    setCreateError(null);
     if (!newTourneyName.trim() || selectedTeamIds.length < 2) return;
+    if (db.getTournaments().some((t) => t.name.trim().toLowerCase() === newTourneyName.trim().toLowerCase())) {
+      setCreateError("A tournament with this name already exists — pick a different name.");
+      return;
+    }
+    const shortSquad = selectedTeamIds.filter(
+      (id) => (db.getTeam(id)?.playerIds || []).length < 2
+    );
+    if (shortSquad.length > 0) {
+      setCreateError(
+        `Every team needs at least 2 players — ${shortSquad
+          .map((id) => db.getTeam(id)?.name || "a team")
+          .join(", ")} has fewer.`
+      );
+      return;
+    }
 
-    const tourneyId = `tourn_${Date.now()}`;
+    const tourneyId = `tourn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const clampedOvers = Math.min(Math.max(tourneyOvers || 8, 1), 40);
     const rules: MatchRules = {
       ...DEFAULT_RULES,
-      overs: tourneyOvers,
+      overs: clampedOvers,
       playersPerSide: 8,
-      maxOversPerBowler: Math.ceil(tourneyOvers / 5),
+      maxOversPerBowler: Math.ceil(clampedOvers / 5),
     };
 
     const tournament: Tournament = {
@@ -131,23 +167,33 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
       createdAt: Date.now(),
     };
 
-    db.saveTournament(tournament);
-
-    // Auto-generate round robin fixtures
-    const fixList = generateRoundRobinFixtures(selectedTeamIds, tourneyId);
-    fixList.forEach((f) => {
-      db.saveFixture({
-        ...f,
-        scheduledDate: "Upcoming Weekend",
-        venue: "Local Ground",
+    try {
+      db.saveTournament(tournament);
+      // Auto-generate round robin fixtures
+      const fixList = generateRoundRobinFixtures(selectedTeamIds, tourneyId);
+      fixList.forEach((f) => {
+        db.saveFixture({
+          ...f,
+          scheduledDate: "Upcoming Weekend",
+          venue: "Local Ground",
+        });
       });
-    });
+    } catch (e) {
+      // Never leave a half-created tournament silently behind.
+      setCreateError(
+        e instanceof Error ? e.message : "Couldn't create the tournament — nothing was saved."
+      );
+      refreshTournaments();
+      return;
+    }
 
     refreshTournaments();
     setSelectedTournament(tournament);
+    setActiveTab("fixtures");
     setShowCreateModal(false);
     setNewTourneyName("");
     setSelectedTeamIds([]);
+    setTourneyOvers(8);
   };
 
   // Compute points table for selected tournament
@@ -432,14 +478,22 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
                 {fixtures.map((fix) => {
                   const tA = db.getTeam(fix.teamAId);
                   const tB = db.getTeam(fix.teamBId);
-                  const isDone = fix.status === "completed" && fix.matchId;
+                  // Route by the LINKED MATCH, not just the fixture status:
+                  // a live/finished match may exist even when the status
+                  // field is stale (pre-1.4.7-test-3 data) — reopening setup would
+                  // create a duplicate match and double-count the league.
+                  const linkedMatch = fix.matchId ? db.getMatch(fix.matchId) : undefined;
+                  const isDone = !!linkedMatch && linkedMatch.status === "completed";
+                  const isLive = !!linkedMatch && linkedMatch.status === "live";
 
                   return (
                     <Pressable
                       key={fix.id}
                       onPress={() => {
-                        if (isDone && fix.matchId) {
-                          onOpenMatchDetail(fix.matchId);
+                        if (linkedMatch) {
+                          // Played or in progress → the match itself
+                          // (MatchDetail has Resume for live matches).
+                          onOpenMatchDetail(linkedMatch.id);
                         } else {
                           onOpenMatchSetup({
                             tournamentId: selectedTournament.id,
@@ -531,6 +585,17 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
                             }}
                           >
                             Completed
+                          </Text>
+                        ) : isLive ? (
+                          <Text
+                            style={{
+                              color: colors.warning,
+                              fontWeight: "600",
+                              fontSize: 12,
+                              fontFamily: FONTS.sans,
+                            }}
+                          >
+                            Live — View
                           </Text>
                         ) : (
                           <View
@@ -949,8 +1014,7 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
             >
               No tournaments created yet.
             </Text>
-            <GullyButton disabled={!canEdit} onPress={() => setShowCreateModal(true)}>
-              Create Tournament
+            <GullyButton disabled={!canEdit} onPress={() => setShowCreateModal(true)}>              Create Tournament
             </GullyButton>
           </View>
         )}

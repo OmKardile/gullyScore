@@ -33,6 +33,7 @@ const KEY_SESSION = "gullyscore_umpire_session_v1";
 const KEY_LOCKOUT = "gullyscore_umpire_lockout_v1";
 const KEY_INSTALL = "gullyscore_install_v1";
 const KEY_STAY_PREF = "gullyscore_umpire_stay12h_v1";
+const KEY_LAST_NAME = "gullyscore_last_umpire_name_v1";
 
 /** 12 hours in ms — "stay in umpire mode" persistence window. */
 export const STAY_MS = 12 * 60 * 60 * 1000;
@@ -90,6 +91,7 @@ let spaceKeyHash: string | null = null;
 let wrongAttempts = 0;
 let lockedUntil = 0;
 let stayFor12h = false;
+let lastName = ""; // last name typed on THIS device (prefill only — see below)
 let identity: { id: string; tag: string; model: string } | null = null;
 let loaded = false;
 const listeners = new Set<() => void>();
@@ -210,6 +212,11 @@ export async function initAccess(): Promise<void> {
   } catch {
     stayFor12h = false;
   }
+  try {
+    lastName = (await AsyncStorage.getItem(KEY_LAST_NAME)) || "";
+  } catch {
+    lastName = "";
+  }
   // A wrong-attempt lockout is only ever a short pause; clear stale ones.
   if (lockedUntil && Date.now() > lockedUntil) {
     lockedUntil = 0;
@@ -278,7 +285,13 @@ export function getAccessState(): AccessState {
 
 function currentAccessModeInternal(): AccessMode {
   if (!spaceConfigured) return "solo";
-  return session ? "umpire" : "audience";
+  if (!session) return "audience";
+  // A session granted against a key that has since been rotated away (or a
+  // persisted session that expired) is NOT an umpire device, even though the
+  // session object still exists. Screens derive their canEdit flag from this
+  // mode, so it must agree with canEdit().
+  if (spaceKeyHash && session.keyHash !== spaceKeyHash) return "audience";
+  return "umpire";
 }
 
 /**
@@ -292,6 +305,16 @@ export function assertCanEdit(action = "edit"): void {
 }
 
 // ─── Session lifecycle ──────────────────────────────────────────────────────
+
+/** The last name someone typed when entering umpire mode on THIS device
+ *  (1.4.7-test-3). Used only to prefill the name field — it stays a
+ *  required, editable, typed field every time, and a handover (Switch
+ *  umpire) starts from an EMPTY field so a new person is never logged
+ *  under the previous name by accident. Never synced, never reused
+ *  silently: the field is always visible in the sheet before unlocking. */
+export function getLastUmpireName(): string {
+  return lastName;
+}
 
 /** Grants a session (key already validated by the caller). */
 export function beginUmpireSession(opts: {
@@ -311,6 +334,8 @@ export function beginUmpireSession(opts: {
     expiresAt: opts.persistFor12h ? Date.now() + STAY_MS : null,
     keyHash: opts.keyHash,
   };
+  lastName = session.name;
+  AsyncStorage.setItem(KEY_LAST_NAME, lastName).catch(() => {});
   persistSession();
   notify();
 }

@@ -233,6 +233,17 @@ export interface Match {
     targetRuns?: number;
     isSuperOver?: boolean;
     ballEvents: BallEvent[];
+    /** ── Live crease/bowling state (1.4.7-test-3) ────────────────────────────────
+     *  The state AFTER the most recent event: who is on strike NOW, and who
+     *  is bowling the NEXT ball. Ball events only record who faced/bowled
+     *  THAT ball — without these fields the post-ball rotation (odd-run
+     *  swap, over-end swap, incoming batter after a wicket, new bowler
+     *  after an over) was lost, so the striker/bowler never changed.
+     *  Optional for backward compatibility: matches recorded before 1.4.7-test-3
+     *  fall back to a deterministic derivation from the event log. */
+    strikerId?: string;
+    nonStrikerId?: string;
+    bowlerId?: string;
   }[];
   resultText?: string;
   winnerTeamId?: string;

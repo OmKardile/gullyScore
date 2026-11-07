@@ -68,10 +68,14 @@ export type ActivityAction =
   | "key_upgraded"
   | "umpire_entered"
   | "umpire_exited"
+  | "umpire_switched"
   | "data_wiped"
   | "demo_reseeded"
   | "backup_imported"
-  | "match_imported";
+  | "match_imported"
+  | "innings_setup"
+  | "crease_set"
+  | "bowler_changed";
 
 /** Append-only human-readable audit entry. Corrections are new rows. */
 export interface ActivityLogEntry {

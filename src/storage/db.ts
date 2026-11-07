@@ -225,6 +225,7 @@ class GullyDb {
     this.matchesCache = null;
     this.tournamentsCache = null;
     this.fixturesCache = null;
+    this.fixturesByTournamentCache = {};
     this.playersMapCache = null;
     this.teamsMapCache = null;
     this.umpiresCache = null;
@@ -331,6 +332,24 @@ class GullyDb {
     return result;
   }
 
+  /** Restores an archived player (1.4.7-test-3). The old "Restore" button called
+   *  deleteOrArchivePlayer, which never restored — and permanently deleted
+   * the player when their matches had been removed. */
+  public unarchivePlayer(id: string): boolean {
+    assertCanEdit("restore player");
+    const p = this.players[id];
+    if (!p || !p.isArchived) return false;
+    p.isArchived = false;
+    p.updatedAt = Date.now();
+    this.persist(STORAGE_KEY_PLAYERS, this.players);
+    this.logActivity("player_saved", {
+      detail: `Restored player ${p.name} from the archive`,
+      after: p.name,
+    });
+    this.notify();
+    return true;
+  }
+
   private deleteOrArchivePlayerInner(id: string): boolean {
     // Check if player has match history
     const hasHistory = Object.values(this.matches).some((m) =>
@@ -401,6 +420,23 @@ class GullyDb {
     return result;
   }
 
+  /** Restores an archived team (1.4.7-test-3) — the symmetric counterpart to
+   *  deleteOrArchiveTeam's archive branch. */
+  public unarchiveTeam(id: string): boolean {
+    assertCanEdit("restore team");
+    const t = this.teams[id];
+    if (!t || !t.isArchived) return false;
+    t.isArchived = false;
+    t.updatedAt = Date.now();
+    this.persist(STORAGE_KEY_TEAMS, this.teams);
+    this.logActivity("team_saved", {
+      detail: `Restored team ${t.name} from the archive`,
+      after: t.name,
+    });
+    this.notify();
+    return true;
+  }
+
   private deleteOrArchiveTeamInner(id: string): boolean {
     // A team referenced by ANYWHERE (a played match, a tournament roster or a
     // pending fixture) is ARCHIVED, never hard-deleted: hard-deleting orphans
@@ -461,43 +497,80 @@ class GullyDb {
       this.setActiveMatchId(null);
     }
 
+    // Tournament linkage (1.4.7-test-3): when a fixture's match completes, the
+    // fixture must complete with it — otherwise the Fixtures list keeps
+    // offering "Play Match" for a played game and the tournament counts it
+    // as pending forever. Direct field write (already gated above) so the
+    // activity log doesn't get a second row for the same save.
+    if (match.status === "completed" && match.fixtureId) {
+      const fix = this.fixtures[match.fixtureId];
+      if (fix && (fix.status !== "completed" || fix.matchId !== match.id)) {
+        this.fixtures[match.fixtureId] = {
+          ...fix,
+          status: "completed",
+          matchId: match.id,
+          updatedAt: Date.now(),
+        };
+        this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+      }
+    }
+
     this.notify();
   }
 
   /** Completed matches are read-only (1.4.7). A save on a completed match
-   *  is allowed ONLY for archive toggles; anything else — including status
-   *  changes — must go through reopenMatch(id, reason), which logs the
-   *  reason. Throws MatchLockedError otherwise. */
+   *  is allowed ONLY for metadata corrections — archive toggles and Player
+   *  of the Match changes; anything else — including status changes — must
+   *  go through reopenMatch(id, reason), which logs the reason. Throws
+   *  MatchLockedError otherwise. */
   private assertCompletedMatchEditable(existing: Match, incoming: Match) {
-    const onlyArchiveChanged =
+    const onlyMetaChanged =
       incoming.status === "completed" &&
       JSON.stringify(existing.innings) === JSON.stringify(incoming.innings) &&
       existing.resultText === incoming.resultText &&
       existing.winnerTeamId === incoming.winnerTeamId &&
-      existing.playerOfTheMatchId === incoming.playerOfTheMatchId &&
       existing.teamAId === incoming.teamAId &&
       existing.teamBId === incoming.teamBId &&
       JSON.stringify(existing.teamAPlayerIds) === JSON.stringify(incoming.teamAPlayerIds) &&
       JSON.stringify(existing.teamBPlayerIds) === JSON.stringify(incoming.teamBPlayerIds) &&
       JSON.stringify(existing.rules) === JSON.stringify(incoming.rules) &&
       JSON.stringify(existing.toss) === JSON.stringify(incoming.toss);
-    if (!onlyArchiveChanged) {
+    if (!onlyMetaChanged) {
       throw new MatchLockedError();
     }
   }
 
   /** Reopens a completed match so it can be edited again. Requires a
-   *  reason; the reopen (with reason) lands in the activity log. */
+   *  reason; the reopen (with reason) lands in the activity log. The frozen
+   * result fields are cleared — a reopened LIVE match must not keep showing
+   * "SPW won by 14 runs" while it is being re-scored, and the auto-complete
+   * path will recompute them when the match completes again. Returns null
+   * when the match is missing or was never completed (no-op guard for the
+   * UI, so a success message can never fire on a no-op). */
   public reopenMatch(id: string, reason: string): Match | null {
     assertCanEdit("reopen match");
     const trimmed = reason.trim();
     if (!trimmed) throw new Error("A reason is required to reopen a match.");
     const match = this.matches[id];
-    if (!match || match.status !== "completed") return match ?? null;
+    if (!match) return null;
+    if (match.status !== "completed") return null;
     const before = `Completed — ${match.resultText || "result recorded"}`;
     match.status = "live";
+    match.resultText = undefined;
+    match.winnerTeamId = undefined;
+    match.playerOfTheMatchId = undefined;
+    match.playerOfTheMatchOverridden = undefined;
     match.updatedAt = Date.now();
     this.persist(STORAGE_KEY_MATCHES, this.matches);
+    // The linked fixture goes back to pending so the league table stops
+    // counting this game as played while it is being corrected.
+    if (match.fixtureId) {
+      const fix = this.fixtures[match.fixtureId];
+      if (fix && fix.status === "completed" && fix.matchId === id) {
+        this.fixtures[match.fixtureId] = { ...fix, status: "pending", updatedAt: Date.now() };
+        this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+      }
+    }
     this.setActiveMatchId(match.id);
     this.logActivity("match_reopened", {
       matchId: id,
@@ -513,9 +586,25 @@ class GullyDb {
   public deleteMatch(id: string) {
     assertCanEdit("delete match");
     const label = this.matchLabel(id);
+    const match = this.matches[id];
     delete this.matches[id];
     if (this.activeMatchId === id) {
       this.setActiveMatchId(null);
+    }
+    // A deleted match must not leave its fixture claiming a completed game:
+    // back to pending so the fixture can be re-played (the fixture link to
+    // the deleted match is dropped entirely).
+    if (match?.fixtureId) {
+      const fix = this.fixtures[match.fixtureId];
+      if (fix && fix.matchId === id) {
+        this.fixtures[match.fixtureId] = {
+          ...fix,
+          status: "pending",
+          matchId: undefined,
+          updatedAt: Date.now(),
+        };
+        this.persist(STORAGE_KEY_FIXTURES, this.fixtures);
+      }
     }
     this.persist(STORAGE_KEY_MATCHES, this.matches);
     this.logActivity("match_deleted", {
@@ -622,14 +711,22 @@ class GullyDb {
     this.notify();
   }
 
+  private fixturesByTournamentCache: Record<string, Fixture[]> = {};
+
   public getFixtures(tournamentId?: string): Fixture[] {
     if (!tournamentId) {
       if (!this.fixturesCache) this.fixturesCache = Object.values(this.fixtures);
       return this.fixturesCache;
     }
-    return this.fixturesCache
-      ? this.fixturesCache.filter((f) => f.tournamentId === tournamentId)
-      : Object.values(this.fixtures).filter((f) => f.tournamentId === tournamentId);
+    // Stable per-tournament arrays (invalidated with the other caches in
+    // notify()): returning a NEW filtered array on every call made every
+    // useMemo keyed on getFixtures(id) re-run its full replay per render.
+    let cached = this.fixturesByTournamentCache[tournamentId];
+    if (!cached) {
+      cached = Object.values(this.fixtures).filter((f) => f.tournamentId === tournamentId);
+      this.fixturesByTournamentCache[tournamentId] = cached;
+    }
+    return cached;
   }
 
   public saveFixture(fixture: Fixture) {
@@ -658,7 +755,15 @@ class GullyDb {
   // notify() — the coordinator calls notifyDataChanged() once per sync so
   // screens re-render a single time instead of per row.
   public applySyncedPlayer(p: Player) {
-    this.players[p.id] = p;
+    // Malformed remote rows are skipped, never merged: a player without a
+    // name crashes every screen that renders `player.role.replace(...)`.
+    if (!p || typeof p.id !== "string" || typeof p.name !== "string") return;
+    this.players[p.id] = {
+      ...p,
+      role: ["batsman", "bowler", "all_rounder", "wicket_keeper"].includes(p.role as never)
+        ? p.role
+        : "all_rounder",
+    };
     this.persist(STORAGE_KEY_PLAYERS, this.players);
   }
 
@@ -668,6 +773,18 @@ class GullyDb {
   }
 
   public applySyncedMatch(m: Match) {
+    // A synced match without a well-formed innings array / rules corrupts
+    // every replay on this device — skip instead of merge.
+    if (
+      !m ||
+      typeof m.id !== "string" ||
+      !Array.isArray(m.innings) ||
+      !m.innings.every((i) => !!i && Array.isArray(i?.ballEvents)) ||
+      !m.rules ||
+      typeof m.rules.overs !== "number"
+    ) {
+      return;
+    }
     this.matches[m.id] = m;
     this.persist(STORAGE_KEY_MATCHES, this.matches);
     if (m.status === "live") {
@@ -924,6 +1041,53 @@ class GullyDb {
       actor: { name: ended.name, tag: ended.tag, model: ended.model },
     });
     this.notify();
+  }
+
+  /** Switch umpire (1.4.7-test-3) — a new person takes over on the SAME
+   *  phone without re-entering the key. Asks for the new name only; the
+   *  previous umpire's session entry is ended (stamped in the umpires list)
+   *  and a fresh one starts under the new name, keeping the same key hash
+   *  and the same 12-hour persistence choice. The handover is logged as a
+   *  plain sentence ("Rahul handed over to Amit") that names both people.
+   *  Names remain self-reported — this is a convenience for passed-around
+   *  phones, not identity proof. */
+  public switchUmpire(newName: string): { ok: true } | { ok: false; error: string } {
+    assertCanEdit("switch umpire");
+    const current = getAccessState().session;
+    if (!current) {
+      return { ok: false, error: "No umpire is signed in on this device." };
+    }
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: "Please type the new umpire's name — it shows next to every change they make.",
+      };
+    }
+    if (trimmed === current.name) {
+      return {
+        ok: false,
+        error: `That's already the current umpire (${current.name}). Type a different name to hand over.`,
+      };
+    }
+    const now = Date.now();
+    endUmpireSession();
+    this.stampOpenUmpireEntries(current.tag, now);
+    const actor = { name: trimmed, tag: current.tag, model: current.model };
+    beginUmpireSession({
+      name: actor.name,
+      keyHash: current.keyHash,
+      // Carry the 12-hour persistence over: a handover mid-match must not
+      // silently downgrade a "stays on" phone to until-restart.
+      persistFor12h: current.expiresAt !== null,
+    });
+    this.appendUmpireEntry(actor);
+    this.logActivity("umpire_switched", {
+      detail: `${current.name} handed over to ${actor.name}`,
+      actor,
+    });
+    this.notify();
+    return { ok: true };
   }
 
   /** Boot-time bookkeeping: a session that ended without an explicit exit
@@ -1311,6 +1475,21 @@ class GullyDb {
       const parsed = JSON.parse(jsonStr);
       if (!parsed.match || !parsed.match.id) {
         return { success: false, message: "Invalid match file format." };
+      }
+      // A match without a well-formed innings array / rules would crash
+      // every replay screen after the import — reject up front.
+      if (
+        !Array.isArray(parsed.match.innings) ||
+        !parsed.match.innings.every(
+          (i: unknown) => !!i && Array.isArray((i as { ballEvents?: unknown }).ballEvents)
+        ) ||
+        !parsed.match.rules ||
+        typeof parsed.match.rules.overs !== "number"
+      ) {
+        return {
+          success: false,
+          message: "This match file is missing its innings or rules — it can't be imported safely.",
+        };
       }
 
       if (parsed.players) {

@@ -38,6 +38,74 @@ export function ballsToOversFraction(legalBalls: number): number {
   return legalBalls / 6;
 }
 
+/** Live crease/bowling state derived from an event log.
+ *
+ * Each BallEvent records who faced/bowled THAT ball; the state BETWEEN balls
+ * (who is on strike NOW) has to be simulated forward. This mirrors the
+ * rotation rules used when recording: odd runs completed swap strike, a
+ * completed over swaps ends, and the incoming batter after a dismissal is
+ * only revealed by the NEXT ball — for a log that ends on a wicket the
+ * dismissed batter is left as a placeholder and `pendingBatter` is true so
+ * the UI can ask for the incoming batter.
+ *
+ * Matches recorded with 1.4.7-test-3+ carry the authoritative state on the innings
+ * itself (strikerId/nonStrikerId/bowlerId); this derivation is the fallback
+ * for older data and the recompute path after edits. */
+export interface LiveCreaseState {
+  strikerId: string;
+  nonStrikerId: string;
+  bowlerId: string;
+  /** the log ends on a dismissal — the incoming batter is not knowable */
+  pendingBatter: boolean;
+}
+
+export function deriveLiveCrease(
+  ballEvents: BallEvent[],
+  rules: MatchRules,
+  battingSquadIds: string[],
+  bowlingSquadIds: string[]
+): LiveCreaseState | null {
+  if (!ballEvents || ballEvents.length === 0) return null;
+  let striker = battingSquadIds[0] || "";
+  let nonStriker = battingSquadIds[1] || "";
+  let bowler = bowlingSquadIds[0] || "";
+  let legalBalls = 0;
+  let pendingBatter = false;
+
+  for (const ball of ballEvents) {
+    if (ball.strikerId) striker = ball.strikerId;
+    if (ball.nonStrikerId) nonStriker = ball.nonStrikerId;
+    if (ball.bowlerId) bowler = ball.bowlerId;
+    pendingBatter = false;
+
+    // Runs completed this ball (wicket balls carry their completed runs on
+    // the wicket info) — odd totals rotate strike.
+    const runsCompleted = ball.wicket ? ball.wicket.runsCompleted : ball.runsBat;
+    const totalRunsRan =
+      runsCompleted +
+      (ball.extraType === "bye" || ball.extraType === "leg_bye" ? ball.extraRuns : 0);
+    if (totalRunsRan % 2 !== 0 && striker && nonStriker) {
+      const tmp = striker;
+      striker = nonStriker;
+      nonStriker = tmp;
+    }
+
+    if (ball.wicket && ball.wicket.type !== "retired_hurt") {
+      // Incoming batter unknown from the log alone — next ball reveals them.
+      pendingBatter = true;
+    }
+
+    if (ball.isLegal) legalBalls++;
+    if (ball.isLegal && legalBalls % 6 === 0 && !rules.lastManBatting && striker && nonStriker) {
+      const tmp = striker;
+      striker = nonStriker;
+      nonStriker = tmp;
+    }
+  }
+
+  return { strikerId: striker, nonStrikerId: nonStriker, bowlerId: bowler, pendingBatter };
+}
+
 export function isDismissalCreditedToBowler(type: WicketType): boolean {
   return (
     type === "bowled" ||
@@ -526,7 +594,12 @@ export function calculateMatchMVPPoints(
           if (b.wicketType === "run_out") {
             p.field += 15;
             p.total += 15;
-          } else if (b.wicketType === "caught" || b.wicketType === "caught_behind" || b.wicketType === "stumped") {
+          } else if (
+            b.wicketType === "caught" ||
+            b.wicketType === "caught_behind" ||
+            b.wicketType === "caught_bowled" ||
+            b.wicketType === "stumped"
+          ) {
             p.field += 10;
             p.total += 10;
           }

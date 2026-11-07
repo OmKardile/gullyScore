@@ -592,6 +592,8 @@ export const HelpScreen: React.FC<{
                 "The space's umpire key (Settings → Umpire Access) unlocks scoring and all edits as the umpire; five wrong entries pause the input briefly.",
                 "Only the key's SHA-256 hash is stored or synced — the key itself is shown once and never leaves the device that typed it.",
                 "Every umpire change lands in the Activity Log: plain sentences, grouped by match and day, searchable, with before → after details.",
+                "Unlocking always asks for your name — prefilled with the last name used on this phone, but editable. Scoring on a shared phone? Tap Switch on the umpire badge to hand over: the new person types just their name (no key), and the handover ('Rahul handed over to Amit') is logged and listed in the Umpires list.",
+                "With 'stay in umpire mode for 12 hours' on, the badge keeps showing the current name with a 'Not you? Switch' link — names are self-reported, so keep them honest.",
                 "Completed matches lock read-only; reopening asks for a reason, which is logged.",
                 "Honest scope: the key is a deterrent against casual or accidental edits, not bank-grade security. A lost key is recovered manually by the developer.",
               ].map((line) => (

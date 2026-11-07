@@ -140,6 +140,11 @@ const FAQ_SECTIONS: { label: string; items: FaqItem[] }[] = [
         q: "I lost the umpire key. What now?",
         a: "Recovery is manual by design — there is no backdoor. Contact the developer with proof you own the space (e.g. its creation details); the key hash can be reset from the database side. If another umpire still has an active session, they can also set a fresh key from Settings → Change Umpire Key before everyone is locked out.",
       },
+      {
+        id: "faq_switch_umpire",
+        q: "Several of us score on one phone. How do names work?",
+        a: "Every time someone unlocks umpire mode, the app asks for their name — the field is prefilled with the last name used on that phone, but it stays editable, so check it's you before unlocking. To hand the phone to the next scorer mid-session, tap Switch on the umpire badge (Home or Settings): the new person types just their name, no key needed. The handover is written to the Activity Log as a plain sentence ('Rahul handed over to Amit') and both names appear in the Umpires list. If 'stay in umpire mode for 12 hours' is on, the badge keeps showing the current name with a 'Not you? Switch' link, so a passed-around phone can't quietly log edits under the wrong person. Names are self-reported — treat them as accountability, not proof of identity.",
+      },
     ],
   },
 ];

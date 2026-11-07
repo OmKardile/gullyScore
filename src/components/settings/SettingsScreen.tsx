@@ -14,7 +14,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 // RN: dropped web-only Moon/Sun/Smartphone/Vibrate imports (unused on web too)
 // and Download/Upload/RefreshCw/Palette/HelpCircle button icons (Svg cannot
@@ -191,7 +191,22 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const handleCreateSpace = async () => {
     setSyncBusy(true);
     try {
-      const code = await createNewSpace("My GullyScore Space");
+      // E2E hygiene (1.4.7-test-3): the automated suite sets the
+      // "gullyscore_e2e" localStorage flag before tapping Create, so the
+      // throwaway spaces it makes carry a clear, consistent name prefix —
+      // easy to find and bulk-delete in the backend dashboard. Real users
+      // never set the flag and keep the normal name.
+      let spaceName = "My GullyScore Space";
+      if (Platform.OS === "web") {
+        try {
+          if (typeof localStorage !== "undefined" && localStorage.getItem("gullyscore_e2e") === "1") {
+            spaceName = `ZZ-E2E-THROWAWAY ${new Date().toISOString()}`;
+          }
+        } catch {
+          /* private mode etc. — normal name */
+        }
+      }
+      const code = await createNewSpace(spaceName);
       flashSyncStatus(
         `Space created — code ${code}. Share it with friends to sync.`,
         8000,

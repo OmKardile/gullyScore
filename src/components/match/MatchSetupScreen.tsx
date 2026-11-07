@@ -228,7 +228,9 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
     initialTeamBId || (teams[1]?.id !== teamAId ? teams[1]?.id : teams[2]?.id) || ""
   );
 
-  const [overs, setOvers] = useState<number>(settings.defaultRules.overs || 10);
+  const [overs, setOvers] = useState<number>(() =>
+    initialTournamentId ? db.getTournament(initialTournamentId)?.rules.overs ?? settings.defaultRules.overs ?? 10 : settings.defaultRules.overs || 10
+  );
   const [playersPerSide, setPlayersPerSide] = useState<number>(
     settings.defaultRules.playersPerSide || 8
   );
@@ -239,6 +241,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   const [date, setDate] = useState<string>(
     new Date().toISOString().split("T")[0]
   );
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   // Toss
   const [tossWinner, setTossWinner] = useState<string>(teamAId);
@@ -300,23 +303,47 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
     if (!canEdit) return; // audience (1.4.7)
     if (!quickPlayerName.trim()) return;
     const targetTeamId = quickAddTargetTeam === "A" ? teamAId : teamBId;
-    const newP = db.quickAddPlayer(quickPlayerName.trim(), targetTeamId);
-    if (quickAddTargetTeam === "A") {
-      setTeamAPlayers((prev) => [...prev, newP.id]);
-    } else {
-      setTeamBPlayers((prev) => [...prev, newP.id]);
+    try {
+      const newP = db.quickAddPlayer(quickPlayerName.trim(), targetTeamId);
+      if (quickAddTargetTeam === "A") {
+        setTeamAPlayers((prev) => [...prev, newP.id]);
+      } else {
+        setTeamBPlayers((prev) => [...prev, newP.id]);
+      }
+      setQuickPlayerName("");
+      setSetupError(null);
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : "Couldn't add the player.");
     }
-    setQuickPlayerName("");
   };
 
   const handleStartMatch = () => {
     if (!canEdit) return; // audience (1.4.7)
+    setSetupError(null);
+
+    // A fixture can only ever be played ONCE: starting setup again for a
+    // fixture that already has a match would orphan the first match and
+    // double-count it in the league table.
+    if (initialFixtureId) {
+      const existingFix = db.getFixtures().find((f) => f.id === initialFixtureId);
+      if (existingFix?.matchId) {
+        setSetupError(
+          "This fixture has already been played — open its match from the tournament instead."
+        );
+        return;
+      }
+    }
+    if (teamAPlayers.length < 2 || teamBPlayers.length < 2) {
+      setSetupError("Each team needs at least 2 players in its squad to play.");
+      return;
+    }
+
     // Defensive clamp (same reasoning as the reconciliation effect above):
     // a stale tossWinner must never reach the match record.
     const tossWinnerId =
       tossWinner === teamAId || tossWinner === teamBId ? tossWinner : teamAId;
     const rules: MatchRules = {
-      overs,
+      overs: Math.min(Math.max(overs || 1, 1), 60),
       playersPerSide,
       ballType,
       wideRunValue: wideRuns,
@@ -338,7 +365,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
         : teamAId;
     const firstBowlTeamId = firstBatTeamId === teamAId ? teamBId : teamAId;
 
-    const matchId = `match_${Date.now()}`;
+    const matchId = `match_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const newMatch: Match = {
       id: matchId,
       teamAId,
@@ -366,12 +393,23 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
       updatedAt: Date.now(),
     };
 
-    db.saveMatch(newMatch);
+    try {
+      db.saveMatch(newMatch);
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : "Couldn't start the match.");
+      return;
+    }
 
     if (initialFixtureId) {
       const fix = db.getFixtures().find((f) => f.id === initialFixtureId);
-      if (fix) {
-        db.saveFixture({ ...fix, matchId });
+      if (fix && !fix.matchId) {
+        try {
+          db.saveFixture({ ...fix, matchId });
+        } catch {
+          // The match exists and is fully playable; the fixture link can be
+          // retried — non-fatal, the completion hook in saveMatch re-links
+          // the fixture when the match ends.
+        }
       }
     }
 
@@ -847,6 +885,20 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
 
           {/* Start Match CTA */}
           <View style={{ paddingTop: 8 }}>
+            {setupError ? (
+              <Text
+                style={{
+                  fontSize: 12,
+                  fontFamily: FONTS.sans,
+                  color: colors.warning,
+                  textAlign: "center",
+                  marginTop: 6,
+                  marginBottom: 4,
+                }}
+              >
+                {setupError}
+              </Text>
+            ) : null}
             <GullyButton
               variant="primary"
               size="lg"
@@ -863,6 +915,21 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
             >
               {canEdit ? "Start Match & Open Live Scorer" : "Umpire key needed to start"}
             </GullyButton>
+            {initialFixtureId &&
+              db.getFixtures().find((f) => f.id === initialFixtureId)?.matchId ? (
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontFamily: FONTS.sans,
+                    color: colors.warning,
+                    textAlign: "center",
+                    marginTop: 6,
+                  }}
+                >
+                  This fixture has already been played — its match exists in the
+                  tournament.
+                </Text>
+              ) : null}
             {!canEdit ? (
               <Text
                 style={{

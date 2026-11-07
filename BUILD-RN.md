@@ -43,7 +43,7 @@ to React Native 0.88 / Expo SDK 58. Same engines, same screens, same data model.
     # do NOT lower it to 36 or the build fails).
 
     Output: android/app/build/outputs/apk/release/app-release.apk
-    (package dev.omkardile.gullyscore, versionName 1.4.5 / versionCode 4, minSdk 24, targetSdk 36)
+    (package dev.omkardile.gullyscore, versionName 1.4.7 / versionCode 8, minSdk 24, targetSdk 36)
 
 ### Route C — Ask the agent sandbox to build it
 The Android toolchain (JDK 21, SDK, NDK 27.1.12297006) fits in the sandbox;

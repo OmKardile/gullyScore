@@ -58,11 +58,20 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
     Appearance.getColorScheme() === "dark"
   );
 
-  // Load persisted theme once db is ready
+  // Load persisted theme once db is ready, and KEEP following the db: a
+  // theme restored from a backup import (or pulled via cloud sync) now
+  // applies immediately instead of only after a restart.
   useEffect(() => {
-    db.init().then(() => {
-      setModeState(db.getSettings().theme);
-    });
+    let cancelled = false;
+    const reread = () => {
+      if (!cancelled) setModeState(db.getSettings().theme);
+    };
+    db.init().then(reread).catch(() => {});
+    const unsub = db.subscribe(reread);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 
   // Track system preference for "system" mode

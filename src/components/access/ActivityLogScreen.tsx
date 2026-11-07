@@ -45,6 +45,7 @@ import { GullyChip, GullySheet } from "../common/Components";
 import { useTheme, FONTS } from "../../design/theme";
 import { db } from "../../storage/db";
 import { ActivityAction, ActivityLogEntry } from "../../types/access";
+import { ArrowRightLeft, Play, Repeat } from "lucide-react-native";
 
 interface ActivityLogScreenProps {
   /** Only show one match's history (Match detail entry point). */
@@ -78,6 +79,10 @@ const ACTION_ICON: Record<ActivityAction, React.ComponentType<{ size?: number; s
   demo_reseeded: Database,
   backup_imported: HardDriveDownload,
   match_imported: Download,
+  innings_setup: Play,
+  crease_set: Users,
+  bowler_changed: Repeat,
+  umpire_switched: ArrowRightLeft,
 };
 
 function isCorrection(a: ActivityAction): boolean {
