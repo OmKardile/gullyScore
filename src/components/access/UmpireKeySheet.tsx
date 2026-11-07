@@ -55,7 +55,17 @@ export const UmpireKeySheet: React.FC<UmpireKeySheetProps> = ({
   // Reset when the sheet reopens / switches mode.
   useEffect(() => {
     if (isOpen) {
-      setKeyInput(mode === "set" || mode === "rotate" ? generateUmpireKey() : "");
+      // CSPRNG key (throws only when no secure random source exists — e.g.
+      // an exotic debug runtime; the user can still TYPE a key in that case).
+      let pregenerated = "";
+      if (mode === "set" || mode === "rotate") {
+        try {
+          pregenerated = generateUmpireKey();
+        } catch {
+          pregenerated = "";
+        }
+      }
+      setKeyInput(pregenerated);
       setNameInput(access.session?.name || "");
       setStay12h(access.stayFor12h);
       setError("");
@@ -207,7 +217,7 @@ export const UmpireKeySheet: React.FC<UmpireKeySheetProps> = ({
             {mode === "enter"
               ? "The umpire key unlocks scoring and every edit for this Sync Space. Everyone else stays in view-only Audience mode."
               : mode === "set"
-                ? "This Sync Space has no umpire key yet. Set one now if you created it — devices that join later will need the key to edit."
+                ? "This Sync Space has no umpire key yet. If you created this space, set the key now — do it before sharing the app update with others, because whoever sets the key first owns it. Devices that join later will need the key to edit."
                 : "A new key ends every other umpire session. Share the new key with your co-scorers after this."}
           </Text>
 

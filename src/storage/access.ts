@@ -6,11 +6,14 @@
  * lives behind this module so the check can later be hardened server-side
  * (e.g. an RPC that verifies the key hash) without touching any UI code.
  *
- * Honest scope (documented in Help + README): this is a deliberate speed
- * bump against accidental or casual edits inside a shared Sync Space — the
- * key hash syncs through the same space, so a technical user with the space
- * code could extract it. It is NOT cryptographic protection. Solo devices
- * (no Sync Space) are never gated — it's their own data.
+ * Honest scope (documented in Help + README + docs/SECURITY.md): this is a
+ * deliberate speed bump against accidental or casual edits inside a shared
+ * Sync Space — the salted key hash syncs through the same space (audience
+ * devices receive it too, by design: they must be able to validate a key on
+ * entry), so a technical user with the space code could attempt an offline
+ * attack against it. The 16-hex CSPRNG key + per-space salt + 10k rounds
+ * make that expensive, but this is NOT cryptographic protection. Solo
+ * devices (no Sync Space) are never gated — it's their own data.
  *
  * State kept here (all AsyncStorage-persisted):
  *  - install identity (random id → short tag like "#A3F9", NOT MAC/IP)
@@ -23,7 +26,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { sha256Hex } from "../util/sha256";
-import { InstallIdentity } from "../types/access";
+import { secureRandomHex } from "../util/random";
+import { InstallIdentity, SpaceKeyAlgo } from "../types/access";
 
 const KEY_SESSION = "gullyscore_umpire_session_v1";
 const KEY_LOCKOUT = "gullyscore_umpire_lockout_v1";
@@ -151,6 +155,16 @@ function tagFromId(id: string): string {
   return `#${id.slice(-4).toUpperCase()}`;
 }
 
+/** CSPRNG install id; falls back to a clock+random hash ONLY if no secure
+ *  source exists — it labels a device, it guards nothing (display tag). */
+function freshInstallId(): string {
+  try {
+    return secureRandomHex(8);
+  } catch {
+    return sha256Hex(`${Date.now()}.${Math.random()}.${Math.random()}`).slice(0, 16);
+  }
+}
+
 /** Loads identity/session/lockout once on boot (call after db.init). */
 export async function initAccess(): Promise<void> {
   if (loaded) return;
@@ -161,10 +175,8 @@ export async function initAccess(): Promise<void> {
       const parsed = JSON.parse(raw) as InstallIdentity;
       identity = { id: parsed.id, tag: tagFromId(parsed.id), model: deviceModelLabel() };
     } else {
-      // 8 random bytes from Math.random + clock + counter, hashed for uniform
-      // spread (no native crypto dep; entropy is fine for a display tag).
-      const seed = `${Date.now()}.${Math.random()}.${Math.random()}.${sessionSalt++}`;
-      const id = sha256Hex(seed).slice(0, 16);
+      // Secure random once per install (16 hex chars; display tag only).
+      const id = freshInstallId();
       identity = { id, tag: tagFromId(id), model: deviceModelLabel() };
       await AsyncStorage.setItem(
         KEY_INSTALL,
@@ -173,7 +185,7 @@ export async function initAccess(): Promise<void> {
     }
   } catch {
     if (!identity) {
-      const id = sha256Hex(`${Date.now()}.${Math.random()}`).slice(0, 16);
+      const id = freshInstallId();
       identity = { id, tag: tagFromId(id), model: deviceModelLabel() };
     }
   }
@@ -207,7 +219,6 @@ export async function initAccess(): Promise<void> {
   expireIfNeeded();
   notify();
 }
-let sessionSalt = 1;
 
 export function getIdentity(): { id: string; tag: string; model: string } | null {
   return identity;
@@ -289,7 +300,7 @@ export function beginUmpireSession(opts: {
   persistFor12h: boolean;
 }): void {
   if (!identity) {
-    const id = sha256Hex(`${Date.now()}.${Math.random()}`).slice(0, 16);
+    const id = freshInstallId();
     identity = { id, tag: tagFromId(id), model: deviceModelLabel() };
   }
   session = {
@@ -326,15 +337,98 @@ export function setStayFor12h(on: boolean) {
 
 // ─── Key helpers + lockout ──────────────────────────────────────────────────
 
-/** Normalizes + hashes an entered key for comparison against the space hash. */
-export function hashUmpireKey(key: string): string {
-  return sha256Hex(key.trim().toLowerCase());
+/** Iterations for the salted digest (1.4.7-test-3+). Slows any offline
+ *  attack on the synced hash by ~10,000× while keeping unlock instant. */
+export const KEY_HASH_ROUNDS = 10_000;
+
+function normalizeUmpireKey(key: string): string {
+  return key.trim().toLowerCase();
 }
 
-/** Generates a fresh 16-hex-char key (creator may also type their own). */
+/** Legacy digest (≤1.4.7-test-2 rows): one unsalted SHA-256 round. Kept ONLY
+ *  to verify old spaces — never used for new set/rotate. */
+export function legacyHashUmpireKey(key: string): string {
+  return sha256Hex(normalizeUmpireKey(key));
+}
+
+/** Salted, iterated digest (1.4.7-test-3+): h = sha256(salt:key), then
+ *  9,999 further rounds of sha256(h). Per-space salt stops cross-space and
+ *  rainbow-table amortization; rounds slow single-target brute force. */
+export function saltedHashUmpireKey(key: string, salt: string): string {
+  let h = sha256Hex(`${salt}:${normalizeUmpireKey(key)}`);
+  for (let i = 1; i < KEY_HASH_ROUNDS; i++) h = sha256Hex(h);
+  return h;
+}
+
+/** Fresh per-space salt (16 bytes → 32 hex, CSPRNG). */
+export function newSpaceKeySalt(): string {
+  return secureRandomHex(16);
+}
+
+/** Verify an entered key against a stored space-key row — either scheme. */
+export function verifyUmpireKey(
+  plainKey: string,
+  sk: { keyHash: string; algo?: SpaceKeyAlgo | string; salt?: string },
+): boolean {
+  if (sk.algo === "sha256-salt" && typeof sk.salt === "string" && sk.salt) {
+    return saltedHashUmpireKey(plainKey, sk.salt) === sk.keyHash;
+  }
+  return legacyHashUmpireKey(plainKey) === sk.keyHash;
+}
+
+/** True when the row predates 1.4.7-test-3 (unsalted single round). */
+export function isLegacySpaceKey(
+  sk: { algo?: SpaceKeyAlgo | string; salt?: string } | null,
+): boolean {
+  if (!sk) return false;
+  return !(sk.algo === "sha256-salt" && typeof sk.salt === "string" && sk.salt);
+}
+
+/** Keys a reasonable person would call obvious: one repeated character,
+ *  a short pattern tiled to 16, the full hex ladder, or a famous constant.
+ *  (The 16-hex format itself is checked separately — this is about
+ *  guessable CONTENT, which brute-force tools try first.) */
+const WELL_KNOWN_KEYS = new Set([
+  "deadbeefdeadbeef",
+  "cafebabecafebabe",
+  "feedfacefeedface",
+  "badc0ffebadc0ffe",
+  "0badc0de0badc0de",
+  "abcdefabcdefabcd",
+]);
+
+export function validateUmpireKeyStrength(
+  key: string,
+): { ok: true } | { ok: false; error: string } {
+  const k = normalizeUmpireKey(key);
+  if (!/^[0-9a-f]{16}$/.test(k)) {
+    return { ok: false, error: "The umpire key must be exactly 16 hex characters (0-9, a-f)." };
+  }
+  const weak =
+    /^(.)\1+$/.test(k) || // aaaaaaaaaaaaaaaa
+    /^(.{2,8})\1+$/.test(k) || // e2e2… / deadbeefdeadbeef / abcd1234abcd1234
+    k === "0123456789abcdef" ||
+    k === "fedcba9876543210" ||
+    WELL_KNOWN_KEYS.has(k);
+  if (weak) {
+    return {
+      ok: false,
+      error: "That key is too easy to guess — use the generated one or a random-looking mix.",
+    };
+  }
+  return { ok: true };
+}
+
+/** Generates a fresh 16-hex key from the CSPRNG (1.4.7-test-3+). Re-rolls on
+ *  the (astronomically unlikely) chance of a weak draw. THROWS when no
+ *  secure random source exists — key generation must fail loud, never
+ *  silently fall back to Math.random. */
 export function generateUmpireKey(): string {
-  return sha256Hex(`${Date.now()}.${Math.random()}.${Math.random()}.${sessionSalt++}`)
-    .slice(0, 16);
+  for (let i = 0; i < 10; i++) {
+    const candidate = secureRandomHex(8); // 8 bytes → 16 hex chars
+    if (validateUmpireKeyStrength(candidate).ok) return candidate;
+  }
+  throw new Error("Couldn't generate a secure key — no random source available.");
 }
 
 export function isLockedOut(): boolean {

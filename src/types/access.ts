@@ -6,12 +6,25 @@
  * umpire session, append-only) and "log" (append-only activity entries).
  */
 
-/** SHA-256 hex digest of the space's umpire key. Only the hash ever syncs. */
+/**
+ * SHA-256 digest of the space's umpire key (never the key itself).
+ *
+ * Two schemes, kept compatible:
+ *  - "sha256"      — legacy (≤1.4.7-test-2): one unsalted round. Still
+ *                    accepted on entry so old spaces keep working; the
+ *                    first successful entry upgrades the row to "sha256-salt".
+ *  - "sha256-salt" — 1.4.7-test-3+: per-space random salt + 10,000 rounds
+ *                    (see access.ts). Every new set/rotate uses it.
+ */
+export type SpaceKeyAlgo = "sha256" | "sha256-salt";
+
 export interface SpaceKeyInfo {
   /** Fixed canonical sync id — "space.key" on every device (no device prefix). */
   id: string;
   keyHash: string;
-  algo: "sha256";
+  algo: SpaceKeyAlgo;
+  /** 32-hex (16-byte) random salt — present only when algo = "sha256-salt". */
+  salt?: string;
   /** epoch ms — LWW cursor for sync */
   updatedAt: number;
   /** display name of the umpire who set/rotated the key last */
@@ -52,6 +65,7 @@ export type ActivityAction =
   | "fixture_saved"
   | "key_set"
   | "key_rotated"
+  | "key_upgraded"
   | "umpire_entered"
   | "umpire_exited"
   | "data_wiped"

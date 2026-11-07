@@ -112,7 +112,7 @@ export const AccessBanner: React.FC<AccessBannerProps> = ({
         <Text style={{ fontSize: 11, color: colors.ink2, fontFamily: FONTS.sans, marginTop: 1 }}>
           {access.spaceHasKey
             ? "Enter the umpire key to score or edit."
-            : "This space has no umpire key yet — the creator can set one."}
+            : "This space has no umpire key yet — its creator should set one first, before sharing the app update."}
         </Text>
       </View>
       <Pressable

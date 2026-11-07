@@ -31,10 +31,14 @@ import {
   endUmpireSession,
   getAccessState,
   getIdentity,
-  hashUmpireKey,
+  isLegacySpaceKey,
   MatchLockedError,
+  newSpaceKeySalt,
   registerWrongKeyAttempt,
+  saltedHashUmpireKey,
   setSpaceKeyHash,
+  validateUmpireKeyStrength,
+  verifyUmpireKey,
 } from "./access";
 
 export const SCHEMA_VERSION = 1;
@@ -684,13 +688,16 @@ class GullyDb {
   }
 
   /** Access-layer mirrors pulled from a Sync Space (never gated — they are
-   *  remote merges, not local edits). LWW by updatedAt. */
+   *  remote merges, not local edits). LWW by updatedAt. The salt + algo
+   *  travel with the row so 1.4.7-test-3+ devices share one salted digest
+   *  (older clients see the row but can only verify the legacy scheme). */
   public applySyncedSpaceKey(sk: SpaceKeyInfo) {
     if (!sk || typeof sk.keyHash !== "string") return;
     const next: SpaceKeyInfo = {
       id: "space.key",
       keyHash: sk.keyHash,
-      algo: "sha256",
+      algo: sk.algo === "sha256-salt" ? "sha256-salt" : "sha256",
+      salt: typeof sk.salt === "string" && sk.salt ? sk.salt : undefined,
       updatedAt: sk.updatedAt || 0,
       setBy: sk.setBy || "",
       setAt: sk.setAt || 0,
@@ -760,21 +767,23 @@ class GullyDb {
 
   /** Creator flow: sets the space's first umpire key (only when none exists
    *  — first setter wins) and immediately grants the setter a session.
-   *  The caller shows the plain key ONCE with a copy action + "save this". */
+   *  The caller shows the plain key ONCE with a copy action + "save this".
+   *  1.4.7-test-3+: always salted + weak keys rejected. */
   public setUmpireKey(plainKey: string, name: string): { key: string; spaceKey: SpaceKeyInfo } {
     if (this.spaceKey) {
       throw new Error("This space already has an umpire key. An umpire can change it from Settings.");
     }
     const trimmedKey = plainKey.trim();
-    if (!/^[0-9a-f]{16}$/.test(trimmedKey.toLowerCase())) {
-      throw new Error("The umpire key must be exactly 16 hex characters (0-9, a-f).");
-    }
+    const strength = validateUmpireKeyStrength(trimmedKey);
+    if (!strength.ok) throw new Error(strength.error);
     const actor = this.actorFields(name);
     const now = Date.now();
+    const salt = newSpaceKeySalt();
     this.spaceKey = {
       id: "space.key",
-      keyHash: hashUmpireKey(trimmedKey),
-      algo: "sha256",
+      keyHash: saltedHashUmpireKey(trimmedKey, salt),
+      algo: "sha256-salt",
+      salt,
       updatedAt: now,
       setBy: actor.name,
       setAt: now,
@@ -794,19 +803,24 @@ class GullyDb {
   }
 
   /** Umpire-only: rotates the key (invalidates every other umpire session)
-   *  and re-grants the rotator. Returns the plain key — shown ONCE. */
+   *  and re-grants the rotator. Returns the plain key — shown ONCE.
+   *  1.4.7-test-3+: fresh per-space salt on every rotation. */
   public rotateUmpireKey(plainKey: string): string {
     assertCanEdit("change the umpire key");
     const trimmedKey = plainKey.trim();
-    if (!/^[0-9a-f]{16}$/.test(trimmedKey.toLowerCase())) {
-      throw new Error("The umpire key must be exactly 16 hex characters (0-9, a-f).");
-    }
+    const strength = validateUmpireKeyStrength(trimmedKey);
+    if (!strength.ok) throw new Error(strength.error);
     const actor = this.actorFields();
-    const now = Date.now();
     if (!this.spaceKey) throw new Error("This space has no umpire key yet — set one first.");
+    // Monotonic LWW: never write a row older than the one it replaces (a
+    // future-dated remote row must not out-live a local rotate/upgrade).
+    const now = Math.max(Date.now(), this.spaceKey.updatedAt + 1);
+    const salt = newSpaceKeySalt();
     this.spaceKey = {
       ...this.spaceKey,
-      keyHash: hashUmpireKey(trimmedKey),
+      keyHash: saltedHashUmpireKey(trimmedKey, salt),
+      algo: "sha256-salt",
+      salt,
       updatedAt: now,
       setBy: actor.name,
       setAt: now,
@@ -847,7 +861,7 @@ class GullyDb {
     if (!name.trim()) {
       return { ok: false, error: "Please enter your name — it shows next to every change you make." };
     }
-    if (hashUmpireKey(plainKey) !== this.spaceKey.keyHash) {
+    if (!verifyUmpireKey(plainKey, this.spaceKey)) {
       const attempt = registerWrongKeyAttempt();
       const left = Math.max(0, 5 - getAccessState().wrongAttempts);
       return {
@@ -859,6 +873,10 @@ class GullyDb {
       };
     }
     clearWrongAttempts();
+    // Pre-1.4.7-test-3 space (unsalted hash): upgrade the row to the salted
+    // scheme while we hold the just-verified plain key — BEFORE the session
+    // grant, so the session is issued against the new hash.
+    const upgraded = this.upgradeLegacySpaceKey(plainKey);
     const actor = this.actorFields(name);
     beginUmpireSession({ name: actor.name, keyHash: this.spaceKey.keyHash, persistFor12h: stayFor12h });
     // A previous session of this device that never got an end stamp (kill,
@@ -866,8 +884,34 @@ class GullyDb {
     this.stampOpenUmpireEntries(actor.tag, Date.now());
     this.appendUmpireEntry(actor);
     this.logActivity("umpire_entered", { detail: "Entered umpire mode", actor });
+    if (upgraded) {
+      this.logActivity("key_upgraded", {
+        detail: "Upgraded this space's key protection (new app version)",
+        actor,
+      });
+    }
     this.notify();
     return { ok: true };
+  }
+
+  /** Re-hashes a legacy (≤1.4.7-test-2, unsalted) space key with a fresh
+   *  per-space salt + 10k rounds. Called only after the plain key was
+   *  verified, so the space is never locked out by the migration itself.
+   *  No-op for already-salted rows. */
+  private upgradeLegacySpaceKey(verifiedPlainKey: string): boolean {
+    if (!this.spaceKey || !isLegacySpaceKey(this.spaceKey)) return false;
+    const salt = newSpaceKeySalt();
+    const now = Math.max(Date.now(), this.spaceKey.updatedAt + 1);
+    this.spaceKey = {
+      ...this.spaceKey,
+      keyHash: saltedHashUmpireKey(verifiedPlainKey, salt),
+      algo: "sha256-salt",
+      salt,
+      updatedAt: now,
+    };
+    this.persist(STORAGE_KEY_SPACE_KEY, this.spaceKey);
+    setSpaceKeyHash(this.spaceKey.keyHash);
+    return true;
   }
 
   /** Ends the session, stamps the umpires-list entry and logs the exit. */

@@ -118,7 +118,12 @@ const FAQ_SECTIONS: { label: string; items: FaqItem[] }[] = [
       {
         id: "faq_umpire_key",
         q: "What is the umpire key and who has it?",
-        a: "Each Sync Space has one umpire key — 16 characters, set by the space's creator when the space is made (or the first person to set one, for spaces created before this feature). Only the key's hash is ever stored or synced, and it's shown exactly once when set, so save it. An umpire can change it from Settings, which instantly ends every other umpire session. Be honest about what this is: a deterrent against casual or accidental edits, not bank-grade security.",
+        a: "Each Sync Space has one umpire key — 16 characters, set by the space's creator when the space is made (or the first person to set one, for spaces created before this feature). Only the key's hash is ever stored or synced — salted so it can't be reversed — and it's shown exactly once when set, so save it. An umpire can change it from Settings, which instantly ends every other umpire session. Be honest about what this is: a deterrent against casual or accidental edits, not bank-grade security.",
+      },
+      {
+        id: "faq_old_space_key",
+        q: "Our space came from an older app version — who should set the key?",
+        a: "The person who created the Sync Space should set the umpire key FIRST, on their own phone, before sharing the new app version with the group — whoever sets it first owns the space's key. If a spectator accidentally sets it, an umpire can't simply take it back: recovery is manual via the developer. So: creator first, then share the update.",
       },
       {
         id: "faq_activity_log",

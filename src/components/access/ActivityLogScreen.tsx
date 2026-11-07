@@ -33,6 +33,7 @@ import {
   RotateCcw,
   ScrollText,
   Search,
+  ShieldCheck,
   Trash,
   Trophy,
   Undo2,
@@ -70,6 +71,7 @@ const ACTION_ICON: Record<ActivityAction, React.ComponentType<{ size?: number; s
   fixture_saved: Calendar,
   key_set: KeyRound,
   key_rotated: KeyRound,
+  key_upgraded: ShieldCheck,
   umpire_entered: LogIn,
   umpire_exited: LogOut,
   data_wiped: Trash,
@@ -97,7 +99,8 @@ function isUmpireChange(a: ActivityAction): boolean {
     a === "umpire_entered" ||
     a === "umpire_exited" ||
     a === "key_set" ||
-    a === "key_rotated"
+    a === "key_rotated" ||
+    a === "key_upgraded"
   );
 }
 
