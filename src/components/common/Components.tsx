@@ -169,6 +169,7 @@ export const GullyTextField: React.FC<TextFieldProps> = ({
       <TextInput
         value={value}
         onChangeText={onChangeText}
+        accessibilityLabel={label}
         placeholder={placeholder}
         placeholderTextColor={colors.ink2}
         keyboardType={keyboardType || "default"}

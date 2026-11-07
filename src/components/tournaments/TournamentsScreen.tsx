@@ -10,6 +10,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Fixture, MatchRules, Tournament } from "../../types/cricket";
 import { db, DEFAULT_RULES } from "../../storage/db";
+import { getAccessState, subscribeAccess } from "../../storage/access";
 import {
   calculateTournamentPointsTable,
   generateRoundRobinFixtures,
@@ -51,6 +52,12 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
   onOpenMatchDetail,
 }) => {
   const { colors } = useTheme();
+  // Umpire access (1.4.7): audience devices cannot create tournaments.
+  const [canEdit, setCanEdit] = useState(getAccessState().mode !== "audience");
+  useEffect(
+    () => subscribeAccess(() => setCanEdit(getAccessState().mode !== "audience")),
+    []
+  );
   const [tournaments, setTournaments] = useState<Tournament[]>(() => db.getTournaments());
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(() => tournaments[0] || null);
   const [activeTab, setActiveTab] = useState<"fixtures" | "table" | "predictions" | "stats">("fixtures");
@@ -100,6 +107,7 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
   };
 
   const handleCreateTournament = () => {
+    if (!canEdit) return; // audience (1.4.7)
     if (!newTourneyName.trim() || selectedTeamIds.length < 2) return;
 
     const tourneyId = `tourn_${Date.now()}`;
@@ -247,6 +255,7 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
         {/* RN: web's GullyButton with an inline <Plus> icon → Pressable
             replicating the primary sm button (icon + label) */}
         <Pressable
+          disabled={!canEdit}
           onPress={() => setShowCreateModal(true)}
           style={({ pressed }) => ({
             height: 36,
@@ -940,7 +949,7 @@ export const TournamentsScreen: React.FC<TournamentsScreenProps> = ({
             >
               No tournaments created yet.
             </Text>
-            <GullyButton onPress={() => setShowCreateModal(true)}>
+            <GullyButton disabled={!canEdit} onPress={() => setShowCreateModal(true)}>
               Create Tournament
             </GullyButton>
           </View>

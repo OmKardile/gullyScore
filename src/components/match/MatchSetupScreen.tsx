@@ -17,6 +17,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Match, MatchRules, Player, Team } from "../../types/cricket";
 import { db, DEFAULT_RULES } from "../../storage/db";
+import { getAccessState, subscribeAccess } from "../../storage/access";
 import {
   GullyButton,
   GullyTextField,
@@ -209,6 +210,13 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   initialTournamentId,
 }) => {
   const { colors } = useTheme();
+  // Umpire access (1.4.7): creating a match edits shared data — audience
+  // devices get a clear notice and the Start button stays inert.
+  const [canEdit, setCanEdit] = useState(getAccessState().mode !== "audience");
+  useEffect(
+    () => subscribeAccess(() => setCanEdit(getAccessState().mode !== "audience")),
+    []
+  );
   // Archived teams are not eligible for new matches (they stay selectable
   // nowhere else either — keeps setup consistent with the Teams list).
   const teams = db.getTeams().filter((t) => !t.isArchived);
@@ -289,6 +297,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   const [quickAddTargetTeam, setQuickAddTargetTeam] = useState<"A" | "B">("A");
 
   const handleQuickAddPlayer = () => {
+    if (!canEdit) return; // audience (1.4.7)
     if (!quickPlayerName.trim()) return;
     const targetTeamId = quickAddTargetTeam === "A" ? teamAId : teamBId;
     const newP = db.quickAddPlayer(quickPlayerName.trim(), targetTeamId);
@@ -301,6 +310,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
   };
 
   const handleStartMatch = () => {
+    if (!canEdit) return; // audience (1.4.7)
     // Defensive clamp (same reasoning as the reconciliation effect above):
     // a stale tossWinner must never reach the match record.
     const tossWinnerId =
@@ -843,6 +853,7 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
               fullWidth
               onPress={handleStartMatch}
               disabled={
+                !canEdit ||
                 !teamAId ||
                 !teamBId ||
                 teamAId === teamBId ||
@@ -850,8 +861,21 @@ export const MatchSetupScreen: React.FC<MatchSetupScreenProps> = ({
                 teamBPlayers.length === 0
               }
             >
-              Start Match & Open Live Scorer
+              {canEdit ? "Start Match & Open Live Scorer" : "Umpire key needed to start"}
             </GullyButton>
+            {!canEdit ? (
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: FONTS.sans,
+                  color: colors.ink2,
+                  textAlign: "center",
+                  marginTop: 6,
+                }}
+              >
+                Creating a match edits shared data — enter the umpire key from Settings first.
+              </Text>
+            ) : null}
             {(teamAPlayers.length === 0 || teamBPlayers.length === 0) &&
               teamAId !== teamBId && (
                 <Text

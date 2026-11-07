@@ -2,7 +2,7 @@
   "expo": {
     "name": "GullyScore",
     "slug": "gullyscore",
-    "version": "1.4.6",
+    "version": "1.4.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

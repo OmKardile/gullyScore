@@ -14,7 +14,7 @@
 import React from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Award, BookOpen, ChevronRight, CircleHelp } from "lucide-react-native";
+import { Award, BookOpen, ChevronRight, CircleHelp, ShieldCheck } from "lucide-react-native";
 import { GullyButton } from "../common/Components";
 import { useTheme, FONTS } from "../../design/theme";
 
@@ -566,6 +566,60 @@ export const HelpScreen: React.FC<{
             >
               NRR = (Total Runs Scored / Total Overs Faced) - (Total Runs Conceded / Total Overs Bowled). Per official ICC standards, if a team is bowled all-out before completing their quota, their overs faced are counted as the full innings quota (e.g. 10.0 overs).
             </Text>
+          </View>
+
+          {/* Audience & Umpire (1.4.7) */}
+          <View style={{ flexDirection: "column", gap: 10 }}>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              <ShieldCheck size={16} color={colors.accent} />
+              <Text
+                style={{
+                  fontFamily: FONTS.serif,
+                  fontWeight: "700",
+                  fontSize: 16,
+                  color: colors.ink,
+                }}
+              >
+                Audience & Umpire Mode
+              </Text>
+            </View>
+            <View style={{ paddingLeft: 20, gap: 6 }}>
+              {[
+                "Solo devices (no Sync Space) are never gated — the data is yours.",
+                "Inside a Sync Space, every device starts in view-only Audience mode: scores, stats and logs are readable, edits are locked.",
+                "The space's umpire key (Settings → Umpire Access) unlocks scoring and all edits as the umpire; five wrong entries pause the input briefly.",
+                "Only the key's SHA-256 hash is stored or synced — the key itself is shown once and never leaves the device that typed it.",
+                "Every umpire change lands in the Activity Log: plain sentences, grouped by match and day, searchable, with before → after details.",
+                "Completed matches lock read-only; reopening asks for a reason, which is logged.",
+                "Honest scope: the key is a deterrent against casual or accidental edits, not bank-grade security. A lost key is recovered manually by the developer.",
+              ].map((line) => (
+                <View key={line} style={{ flexDirection: "row", gap: 8 }}>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 20,
+                      color: colors.ink,
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    •
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 20,
+                      color: colors.ink,
+                      fontFamily: FONTS.sans,
+                      flex: 1,
+                    }}
+                  >
+                    {line}
+                  </Text>
+                </View>
+              ))}
+            </View>
           </View>
         </View>
       </ScrollView>

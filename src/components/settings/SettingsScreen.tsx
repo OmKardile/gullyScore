@@ -22,6 +22,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Check, ChevronLeft, Cloud, CloudOff, HardDrive, RefreshCw, TriangleAlert } from "lucide-react-native";
 import { db, AppSettings } from "../../storage/db";
 import {
+  canEdit,
+  getAccessState,
+  subscribeAccess,
+} from "../../storage/access";
+import {
   createNewSpace,
   getBackendStatus,
   getSyncState,
@@ -37,6 +42,8 @@ import {
   GullySheet,
   GullyTextField,
 } from "../common/Components";
+import { AccessBanner } from "../access/AccessBanner";
+import { UmpireKeySheet, UmpireSheetMode } from "../access/UmpireKeySheet";
 import { useTheme, FONTS } from "../../design/theme";
 
 interface SettingsScreenProps {
@@ -45,6 +52,8 @@ interface SettingsScreenProps {
   onOpenFaq: () => void;
   onStartTour: () => void;
   onOpenGallery: () => void;
+  onOpenActivityLog: () => void;
+  onOpenUmpires: () => void;
   onThemeChanged: () => void;
 }
 
@@ -80,6 +89,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onOpenFaq,
   onStartTour,
   onOpenGallery,
+  onOpenActivityLog,
+  onOpenUmpires,
   onThemeChanged,
 }) => {
   const { colors, setMode } = useTheme();
@@ -130,6 +141,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [joinCode, setJoinCode] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
   const [syncStatusKind, setSyncStatusKind] = useState<"error" | "success">("error");
+
+  // --- Umpire access (1.4.7) ---
+  const [access, setAccess] = useState(getAccessState());
+  const [keySheet, setKeySheet] = useState<{ open: boolean; mode: UmpireSheetMode }>({
+    open: false,
+    mode: "enter",
+  });
+  useEffect(() => {
+    const reread = () => setAccess(getAccessState());
+    reread();
+    return subscribeAccess(reread);
+  }, []);
+  const editable = access.mode === "solo" || access.mode === "umpire";
+
+  const openKeySheet = (mode: UmpireSheetMode) => setKeySheet({ open: true, mode });
+
+  const handleExitUmpire = () => {
+    try {
+      db.exitUmpireMode();
+    } catch (e) {
+      flashSyncStatus(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const flashSyncStatus = (msg: string, ms = 5000, kind: "error" | "success" = "error") => {
     setSyncStatusKind(kind);
@@ -212,40 +246,63 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const handleImportBackup = () => {
     // RN: web read the chosen .json file with a FileReader — no file picker;
     // the pasted JSON text is restored instead.
-    const res = db.importAllFromJson(importText);
-    setBackupStatus(res.message);
-    onThemeChanged();
-    setImportSheetOpen(false);
-    setImportText("");
-    setTimeout(() => setBackupStatus(""), 4000);
+    try {
+      const res = db.importAllFromJson(importText);
+      setBackupStatus(res.message);
+      onThemeChanged();
+      setImportSheetOpen(false);
+      setImportText("");
+    } catch (e) {
+      setBackupStatus(e instanceof Error ? e.message : String(e));
+      setTimeout(() => setBackupStatus(""), 6000);
+    }
   };
 
   const handleResetSeedData = () => {
     // RN: window.confirm → inline confirm row (confirmReset state above).
     // reseedDemoData also clears the intentional-wipe marker so a fresh
     // install's demo content comes back (and STAYS back across restarts).
-    db.reseedDemoData();
-    onThemeChanged();
-    setConfirmReset(false);
-    setBackupStatus("Demo data reloaded!");
-    setTimeout(() => setBackupStatus(""), 3000);
+    try {
+      db.reseedDemoData();
+      onThemeChanged();
+      setConfirmReset(false);
+      setBackupStatus("Demo data reloaded!");
+    } catch (e) {
+      setConfirmReset(false);
+      setBackupStatus(e instanceof Error ? e.message : String(e));
+    }
+    setTimeout(() => setBackupStatus(""), 4000);
   };
 
   const handleWipeAll = () => {
+    // Audience check comes FIRST: leaving the space below must never happen
+    // for a blocked wipe (the db gate throws, but by then we'd already be
+    // out of the space).
+    if (getAccessState().mode === "audience") {
+      setBackupStatus("Wiping is an umpire action — enter the umpire key to unlock it.");
+      setTimeout(() => setBackupStatus(""), 6000);
+      return;
+    }
     // If a Sync Space is connected, leave it BEFORE wiping: otherwise the
     // next sync would push the vanished rows as deletions (tombstones) and
     // silently erase the shared cloud copy too. Leaving first keeps the
     // wipe strictly local — the friend's data is never disturbed.
-    const spaceName = getSyncState().code;
-    if (spaceName) leaveSpace();
-    db.wipeAllData();
-    setConfirmWipe(false);
-    setBackupStatus(
-      spaceName
-        ? "All local data wiped. Sync Space left first, so the shared cloud copy is safe."
-        : "All local data wiped."
-    );
-    setTimeout(() => setBackupStatus(""), 8000);
+    try {
+      const spaceName = getSyncState().code;
+      if (spaceName) leaveSpace();
+      db.wipeAllData();
+      setConfirmWipe(false);
+      setBackupStatus(
+        spaceName
+          ? "All local data wiped. Sync Space left first, so the shared cloud copy is safe."
+          : "All local data wiped."
+      );
+      setTimeout(() => setBackupStatus(""), 8000);
+    } catch (e) {
+      setConfirmWipe(false);
+      setBackupStatus(e instanceof Error ? e.message : String(e));
+      setTimeout(() => setBackupStatus(""), 6000);
+    }
   };
 
   const section = {
@@ -563,6 +620,46 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           ) : null}
         </View>
 
+        {/* Umpire Access (1.4.7) — Audience vs Umpire mode */}
+        <View style={[section, { flexDirection: "column", gap: 12 }]}>
+          <Text style={sectionLabel}>Umpire Access</Text>
+
+          {access.mode === "solo" ? (
+            <Text style={{ fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2, lineHeight: 18 }}>
+              Solo device — full access, no key needed. Join a Sync Space below to
+              share scoring: viewers there stay read-only until they enter the
+              space's umpire key.
+            </Text>
+          ) : (
+            <AccessBanner
+              onEnterKey={() => openKeySheet(access.spaceHasKey ? "enter" : "set")}
+              onExitUmpire={handleExitUmpire}
+            />
+          )}
+
+          {access.mode === "umpire" ? (
+            <GullyButton
+              variant="quiet"
+              fullWidth
+              onPress={() => openKeySheet("rotate")}
+            >
+              Change Umpire Key
+            </GullyButton>
+          ) : null}
+
+          <GullyButton variant="quiet" fullWidth onPress={onOpenUmpires}>
+            Umpires List
+          </GullyButton>
+          <GullyButton variant="quiet" fullWidth onPress={onOpenActivityLog}>
+            Activity Log
+          </GullyButton>
+          <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2, lineHeight: 16 }}>
+            The umpire key is a deterrent against casual edits, not bank-grade
+            security — be honest about that with your group. Lost key? Recovery
+            is manual: contact the developer.
+          </Text>
+        </View>
+
         {/* Appearance & Hardware */}
         <View style={[section, { flexDirection: "column", gap: 12 }]}>
           <Text style={sectionLabel}>Appearance &amp; Ergonomics</Text>
@@ -706,10 +803,21 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               Export All Data (.json)
             </GullyButton>
 
-            <GullyButton variant="quiet" fullWidth onPress={() => setImportSheetOpen(true)}>
+            <GullyButton
+              variant="quiet"
+              fullWidth
+              disabled={!editable}
+              onPress={() => setImportSheetOpen(true)}
+            >
               Import JSON
             </GullyButton>
           </View>
+
+          {!editable ? (
+            <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2 }}>
+              Importing changes data — enter the umpire key to unlock it.
+            </Text>
+          ) : null}
 
           <View style={{ paddingTop: 8 }}>
             {confirmReset ? (
@@ -728,6 +836,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               <GullyButton
                 variant="text"
                 size="sm"
+                disabled={!editable}
                 onPress={() => setConfirmReset(true)}
               >
                 Reset &amp; Reload Demo Data
@@ -740,7 +849,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         <View style={[section, { flexDirection: "column", gap: 8 }]}>
           <Text style={sectionLabel}>Help &amp; Learning</Text>
           <GullyButton variant="quiet" fullWidth onPress={onStartTour}>
-            Replay Guide Tour (7 Steps)
+            Replay Guide Tour (8 Steps)
           </GullyButton>
           <GullyButton variant="quiet" fullWidth onPress={onOpenFaq}>
             Frequently Asked Questions (FAQ)
@@ -831,11 +940,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             <GullyButton
               variant="accent"
               fullWidth
+              disabled={!editable}
               onPress={() => setConfirmWipe(true)}
             >
               Wipe All Local Data
             </GullyButton>
           )}
+          {!editable ? (
+            <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2 }}>
+              Wiping is an umpire action — enter the umpire key to unlock it.
+            </Text>
+          ) : null}
         </View>
 
         {/* About & Mandatory Credits */}
@@ -930,6 +1045,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           Restore Backup
         </GullyButton>
       </GullySheet>
+
+      {/* Umpire key sheet — enter / set / rotate (1.4.7) */}
+      <UmpireKeySheet
+        isOpen={keySheet.open}
+        mode={keySheet.mode}
+        onClose={() => setKeySheet((s) => ({ ...s, open: false }))}
+      />
     </SafeAreaView>
   );
 };

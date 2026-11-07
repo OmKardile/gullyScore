@@ -26,19 +26,21 @@ import {
   GullyButton,
   GullySegmented,
   GullySheet,
+  GullyTextField,
   ManhattanChart,
   WagonWheel,
 } from "../common/Components";
 import { calculatePreMatchPrediction } from "../../engine/predictionEngine";
 // RN: dropped lucide Download/Copy/Check/TrendingUp icons (web-only download,
 // clipboard & poster features; TrendingUp was imported but unused on web).
-import { ChevronLeft, Share2, Award, Sparkles } from "lucide-react-native";
+import { ChevronLeft, Share2, Award, Sparkles, History, RotateCcw } from "lucide-react-native";
 import { useTheme, FONTS } from "../../design/theme";
 
 interface MatchDetailScreenProps {
   matchId: string;
   onBack: () => void;
   onResumeScoring?: (matchId: string) => void;
+  onOpenActivityLog?: (matchId: string) => void;
 }
 
 type ShareMode = "whatsapp" | "json";
@@ -47,6 +49,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
   matchId,
   onBack,
   onResumeScoring,
+  onOpenActivityLog,
 }) => {
   const { colors } = useTheme();
   const [match, setMatch] = useState<Match | undefined>(() => db.getMatch(matchId));
@@ -57,6 +60,28 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
   // RN: replaces the web canvas poster — sheet shows share text / match JSON.
   const [shareMode, setShareMode] = useState<ShareMode>("json");
   const [shareJson, setShareJson] = useState<string>("");
+  // Reopen a completed match (1.4.7): umpire-only, requires a logged reason.
+  const [reopenSheetOpen, setReopenSheetOpen] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopenError, setReopenError] = useState("");
+  const [reopenDone, setReopenDone] = useState("");
+
+  const handleReopenMatch = () => {
+    setReopenError("");
+    try {
+      const m = db.reopenMatch(matchId, reopenReason);
+      if (m) {
+        setReopenSheetOpen(false);
+        setReopenReason("");
+        setReopenDone("Match reopened — it's live and editable again.");
+        setTimeout(() => setReopenDone(""), 5000);
+      } else {
+        setReopenError("Match not found.");
+      }
+    } catch (e) {
+      setReopenError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   // Stale-snapshot fix: this screen used to capture the match ONCE on mount.
   // Resuming scoring from detail (Scoring pushes ON TOP of this screen),
@@ -273,6 +298,16 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
         </Text>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {onOpenActivityLog ? (
+            <Pressable
+              onPress={() => onOpenActivityLog(match.id)}
+              hitSlop={8}
+              accessibilityLabel="Match activity log"
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            >
+              <History size={20} strokeWidth={1.5} color={colors.ink2} />
+            </Pressable>
+          ) : null}
           {match.status === "live" && onResumeScoring ? (
             <Pressable onPress={() => onResumeScoring(match.id)} hitSlop={8}>
               <Text
@@ -359,6 +394,51 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
               >
                 {match.resultText || (match.status === "live" ? "Match in Progress" : "Match Abandoned")}
               </Text>
+
+              {/* Completed matches are locked (1.4.7): umpires can reopen
+                  with a reason; everyone can read the match's activity. */}
+              {match.status === "completed" ? (
+                <View style={{ alignItems: "center", gap: 6, marginBottom: 10 }}>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontFamily: FONTS.sans,
+                      color: colors.ink2,
+                    }}
+                  >
+                    Completed — read-only. Reopen (with a reason) to edit.
+                  </Text>
+                  <GullyButton
+                    size="sm"
+                    variant="quiet"
+                    onPress={() => {
+                      setReopenError("");
+                      setReopenReason("");
+                      setReopenSheetOpen(true);
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <RotateCcw size={14} strokeWidth={2} color={colors.ink} />
+                      <Text style={{ fontSize: 12, fontFamily: FONTS.sans, fontWeight: "500", color: colors.ink }}>
+                        Reopen match
+                      </Text>
+                    </View>
+                  </GullyButton>
+                </View>
+              ) : null}
+              {reopenDone ? (
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontFamily: FONTS.sans,
+                    color: colors.success,
+                    marginBottom: 8,
+                    textAlign: "center",
+                  }}
+                >
+                  {reopenDone}
+                </Text>
+              ) : null}
 
               {/* Innings Scores Comparison */}
               <View
@@ -1015,6 +1095,46 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
         >
           Close
         </GullyButton>
+      </GullySheet>
+
+      {/* Reopen sheet (1.4.7): completed matches are read-only; the reason
+          is required and lands in the activity log. */}
+      <GullySheet
+        isOpen={reopenSheetOpen}
+        onClose={() => setReopenSheetOpen(false)}
+        title="Reopen this match?"
+      >
+        <View style={{ gap: 16 }}>
+          <Text style={{ fontSize: 14, fontFamily: FONTS.sans, color: colors.ink2, lineHeight: 20 }}>
+            The match goes back to “live” and can be edited again. Tell your group
+            why — the reason is recorded in the activity log next to your name.
+          </Text>
+          <GullyTextField
+            label="Reason (required)"
+            value={reopenReason}
+            onChangeText={setReopenReason}
+            placeholder="e.g. Last ball was recorded as 2 instead of 4"
+            multiline
+          />
+          {reopenError ? (
+            <Text style={{ fontSize: 13, fontFamily: FONTS.sans, color: colors.accent }}>
+              {reopenError}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <GullyButton variant="quiet" fullWidth onPress={() => setReopenSheetOpen(false)}>
+              Cancel
+            </GullyButton>
+            <GullyButton
+              variant="primary"
+              fullWidth
+              disabled={reopenReason.trim() === ""}
+              onPress={handleReopenMatch}
+            >
+              Reopen match
+            </GullyButton>
+          </View>
+        </View>
       </GullySheet>
     </SafeAreaView>
   );

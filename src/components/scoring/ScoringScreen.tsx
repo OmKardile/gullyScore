@@ -28,6 +28,9 @@ import {
   WicketType,
 } from "../../types/cricket";
 import { db } from "../../storage/db";
+import { canEdit, getAccessState, subscribeAccess } from "../../storage/access";
+import { AccessBanner } from "../access/AccessBanner";
+import { UmpireKeySheet, UmpireSheetMode } from "../access/UmpireKeySheet";
 import {
   replayInnings,
   formatOvers,
@@ -74,6 +77,26 @@ interface ScoringScreenProps {
  * (pass it as an array element: style={[…, TNUM]}).
  */
 const TNUM = { fontVariant: ["tabular-nums"] as const };
+
+/** Human one-liner for a scored/recorded ball — used by the activity log. */
+function ballSentence(b: BallEvent): string {
+  const over = `${b.overNumber + 1}.${b.ballInOver}`;
+  if (b.wicket) {
+    return `took a wicket (${b.wicket.type.replace(/_/g, " ")}) — over ${over}`;
+  }
+  if (b.extraType === "wide") {
+    return `recorded a wide${b.runsBat ? ` +${b.runsBat} run(s)` : ""} — over ${over}`;
+  }
+  if (b.extraType === "no_ball") {
+    return `recorded a no-ball${b.runsBat ? ` +${b.runsBat} run(s)` : ""} — over ${over}`;
+  }
+  if (b.extraType === "bye" || b.extraType === "leg_bye") {
+    return `recorded ${b.extraRuns} ${b.extraType === "leg_bye" ? "leg-bye" : "bye"}${b.extraRuns === 1 ? "" : "s"} — over ${over}`;
+  }
+  if (b.runsBat === 4) return `scored FOUR — over ${over}`;
+  if (b.runsBat === 6) return `scored SIX — over ${over}`;
+  return `scored ${b.runsBat} run${b.runsBat === 1 ? "" : "s"} — over ${over}`;
+}
 
 /** Split an array into fixed-size rows — RN replacement for CSS grid-cols-*. */
 function chunked<T>(items: T[], size: number): T[][] {
@@ -393,6 +416,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
   // Auto end check
   useEffect(() => {
+    // Audience devices never drive innings transitions: a pulled "live +
+    // completed scorecard" match (e.g. the umpire's phone died right after
+    // the completing ball) must NOT make a viewer's write — the transition
+    // arrives with the umpire device's next sync. Guarding here also keeps
+    // the gated saveMatch below from throwing inside this effect.
+    if (!canEdit()) return;
     if (scorecard.isCompleted && match.status === "live") {
       // Check if 1st innings just completed
       if (currentInningsIndex === 0 && match.innings.length === 1) {
@@ -442,6 +471,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           winnerTeamId,
         };
         db.saveMatch(updatedMatch);
+        db.logActivity("match_completed", {
+          matchId: match.id,
+          detail: `completed the match — ${resultText}`,
+          after: resultText,
+        });
       }
     }
   }, [
@@ -507,6 +541,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       wicket?: DismissalInfo,
       shotDirection?: ShotDirection
     ) => {
+      if (!canEdit()) return; // audience devices never write (1.4.7)
       const liveMatch = db.getMatch(matchId);
       if (!liveMatch) return;
       // Never mutate a finished/abandoned match (e.g. opened from a stale
@@ -648,6 +683,13 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
 
       db.saveMatch(updatedMatch);
 
+      // Activity log (1.4.7): every scoring action, attributed + readable.
+      db.logActivity("ball_scored", {
+        matchId,
+        detail: ballSentence(newBall),
+        after: `${newBall.runsBat}${newBall.extraType !== "none" ? ` ${newBall.extraType}` : ""} run(s)`,
+      });
+
       // The explicit bowler choice has been consumed by this ball.
       if (selectedNextBowlerId) setSelectedNextBowlerId("");
 
@@ -691,19 +733,28 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // Undo last ball — live db read so rapid undos remove exactly one ball
   // per tap (React state is async and would otherwise replay the same slice).
   const handleUndo = () => {
+    if (!canEdit()) return; // audience — the pad is disabled, belt & braces
     const liveMatch = db.getMatch(matchId);
     if (!liveMatch || liveMatch.status !== "live") return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
     if (!liveInn || liveInn.ballEvents.length === 0) return;
+    const removed = liveInn.ballEvents[liveInn.ballEvents.length - 1];
     const updatedEvents = liveInn.ballEvents.slice(0, -1);
     const updatedInnings = [...liveMatch.innings];
     updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updatedEvents };
     db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    db.logActivity("ball_removed", {
+      matchId,
+      detail: `undid the last ball — ${ballSentence(removed)}`,
+      before: ballSentence(removed),
+      correction: true,
+    });
     triggerHaptic("undo");
   };
 
   // Swap striker manually (live db read — same stale-state guard as undo)
   const handleSwapStriker = () => {
+    if (!canEdit()) return;
     const liveMatch = db.getMatch(matchId);
     if (!liveMatch || liveMatch.status !== "live") return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
@@ -716,6 +767,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     const updatedInnings = [...liveMatch.innings];
     updatedInnings[liveMatch.currentInningsIndex] = { ...liveInn, ballEvents: updated };
     db.saveMatch({ ...liveMatch, innings: updatedInnings });
+    db.logActivity("striker_swapped", {
+      matchId,
+      detail: "swapped striker and non-striker",
+      correction: true,
+    });
     triggerHaptic("light");
   };
 
@@ -753,6 +809,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // Save wagon wheel shot direction (live db read — the pending ball is
   // matched against the newest persisted events, never a stale snapshot)
   const handleSaveShotDirection = (dir: ShotDirection) => {
+    if (!canEdit()) return; // audience (1.4.7)
     const liveMatch = db.getMatch(matchId);
     if (!liveMatch || liveMatch.status !== "live" || !pendingWagonBall) return;
     const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
@@ -774,8 +831,22 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   });
 
   // Pad is only interactive while the match is live (guards above make every
-  // write path no-op on finished matches; this keeps the UI honest too).
+  // write path no-op on finished matches; this keeps the UI honest too) AND
+  // this device may edit (umpire/solo). Audience devices view only (1.4.7).
+  const [access, setAccess] = useState(getAccessState());
+  const [keySheet, setKeySheet] = useState<{ open: boolean; mode: UmpireSheetMode }>({
+    open: false,
+    mode: "enter",
+  });
+  useEffect(() => {
+    const reread = () => setAccess(getAccessState());
+    reread();
+    return subscribeAccess(reread);
+  }, []);
+  const canScore = access.mode === "solo" || access.mode === "umpire";
+
   const isMatchLive = match.status === "live";
+  const padEnabled = isMatchLive && canScore;
 
   const isLeftHandPad = settings.padHand === "left";
 
@@ -1155,13 +1226,34 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           </View>
         </View>
 
+        {/* Audience-mode banner (1.4.7) — the pad below is inert until the
+            umpire key is entered. */}
+        {access.spaceConfigured && !canScore ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            <AccessBanner
+              onEnterKey={() =>
+                setKeySheet({ open: true, mode: access.spaceHasKey ? "enter" : "set" })
+              }
+              onExitUmpire={() => {
+                try {
+                  db.exitUmpireMode();
+                } catch {
+                  /* nothing to exit */
+                }
+              }}
+            />
+          </View>
+        ) : null}
+
         {/* Thumb Zone Scoring Pad (Bottom 45%) */}
         <View
+          pointerEvents={padEnabled ? "auto" : "none"}
           style={{
             width: "100%",
             backgroundColor: colors.surface,
             borderTopWidth: 1,
             borderTopColor: colors.hairlineStrong,
+            opacity: padEnabled ? 1 : 0.45,
             padding: 12,
             // RN: web's pb-safe bottom inset is handled by the root SafeAreaView
           }}
@@ -1249,7 +1341,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                   key={run}
                   label={`${run}`}
                   isBoundary={isBoundary}
-                  disabled={!isMatchLive}
+                  disabled={!padEnabled}
                   onPress={() => recordBall(run)}
                 />
               );
@@ -1902,6 +1994,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                       onPress={() => {
                         // Delete this specific ball and recompute (live db read
                         // so the edit always applies to the newest state)
+                        if (!canEdit()) return; // audience (1.4.7)
                         const liveMatch = db.getMatch(matchId);
                         if (!liveMatch) return;
                         const liveInn = liveMatch.innings[liveMatch.currentInningsIndex];
@@ -1913,6 +2006,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                           ballEvents: updated,
                         };
                         db.saveMatch({ ...liveMatch, innings: updatedInnings });
+                        db.logActivity("ball_removed", {
+                          matchId,
+                          detail: `deleted a ball from the log — ${ballSentence(ball)}`,
+                          before: ballSentence(ball),
+                          correction: true,
+                        });
                       }}
                       style={({ pressed }) => ({
                         paddingHorizontal: 8,
@@ -2439,6 +2538,13 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           </View>
         </CenteredModal>
       )}
+
+      {/* Umpire key sheet (audience → umpire entry point, 1.4.7) */}
+      <UmpireKeySheet
+        isOpen={keySheet.open}
+        mode={keySheet.mode}
+        onClose={() => setKeySheet((s) => ({ ...s, open: false }))}
+      />
     </SafeAreaView>
   );
 };

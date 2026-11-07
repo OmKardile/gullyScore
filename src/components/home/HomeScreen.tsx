@@ -28,6 +28,9 @@ import {
   subscribeBackendStatus,
 } from "../../storage/sync";
 import { GullyButton } from "../common/Components";
+import { AccessBanner } from "../access/AccessBanner";
+import { UmpireKeySheet, UmpireSheetMode } from "../access/UmpireKeySheet";
+import { getAccessState, subscribeAccess } from "../../storage/access";
 import {
   Plus,
   Settings as SettingsIcon,
@@ -74,6 +77,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     return subscribeBackendStatus(reread);
   }, []);
 
+  // Umpire access (1.4.7): persistent mode indicator + key sheet entry.
+  const [access, setAccess] = useState(getAccessState());
+  const [keySheet, setKeySheet] = useState<{ open: boolean; mode: UmpireSheetMode }>({
+    open: false,
+    mode: "enter",
+  });
+  useEffect(() => {
+    const reread = () => setAccess(getAccessState());
+    reread();
+    return subscribeAccess(reread);
+  }, []);
+  const canEdit = access.mode === "solo" || access.mode === "umpire";
+
   // RN: web `animate-pulse` on the live dot → trivial Animated loop.
   const pulse = useRef(new Animated.Value(1)).current;
   useEffect(() => {
@@ -98,7 +114,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   }, []);
 
   const handleToggleArchive = (matchId: string) => {
-    const isNowArchived = db.toggleArchiveMatch(matchId);
+    let isNowArchived: boolean;
+    try {
+      isNowArchived = db.toggleArchiveMatch(matchId);
+    } catch {
+      return; // audience (1.4.7) — the gate blocked the archive toggle
+    }
     setToastMessage({
       text: isNowArchived ? "Match moved to archive" : "Match restored from archive",
       matchId,
@@ -110,7 +131,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   const handleUndoArchive = () => {
     if (toastMessage?.matchId) {
-      db.toggleArchiveMatch(toastMessage.matchId);
+      try {
+        db.toggleArchiveMatch(toastMessage.matchId);
+      } catch {
+        /* audience — gate already blocked it */ 
+      }
       setToastMessage(null);
     }
   };
@@ -224,6 +249,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             gap: 20,
           }}
         >
+          {/* AUDIENCE / UMPIRE MODE BANNER (1.4.7) */}
+          {access.mode !== "solo" ? (
+            <AccessBanner
+              onEnterKey={() =>
+                setKeySheet({ open: true, mode: access.spaceHasKey ? "enter" : "set" })
+              }
+              onExitUmpire={() => {
+                try {
+                  db.exitUmpireMode();
+                } catch {
+                  /* session already gone — banner re-renders on its own */
+                }
+              }}
+            />
+          ) : null}
+
           {/* RESUME MATCH HERO BANNER (If a match is live) */}
           {activeMatch && (
             <View
@@ -282,6 +323,48 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   {activeMatch.venue || "Local Ground"}
                 </Text>
               </View>
+
+              {/* Umpire chip (1.4.7): who is scoring this shared match. */}
+              {access.spaceConfigured ? (
+                <View
+                  accessibilityLabel={
+                    db.getActiveUmpire()
+                      ? `Umpire: ${db.getActiveUmpire()!.name}`
+                      : "No umpire scoring right now"
+                  }
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 2,
+                    borderWidth: 1,
+                    borderColor: colors.hairlineStrong,
+                    backgroundColor: colors.surfaceCard,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: db.getActiveUmpire() ? colors.success : colors.ink2,
+                    }}
+                  />
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontFamily: FONTS.sansSemiBold,
+                      color: colors.ink,
+                    }}
+                  >
+                    {db.getActiveUmpire()
+                      ? `Umpire: ${db.getActiveUmpire()!.name}`
+                      : "No umpire yet"}
+                  </Text>
+                </View>
+              ) : null}
 
               <View
                 style={{
@@ -837,10 +920,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
       {/* ANCHORED IN-LAYOUT PRIMARY ACTION BAR (STRICT NO-FAB REQUIREMENT) */}
       {/* RN: web gradient fade dropped — solid bg pad instead. */}
-      <View style={{ padding: 12, backgroundColor: colors.bg }}>
+      <View style={{ padding: 12, backgroundColor: colors.bg, gap: 6 }}>
         <View style={{ width: "100%", maxWidth: 560, alignSelf: "center" }}>
           <Pressable
-            onPress={onStartNewMatch}
+            onPress={canEdit ? onStartNewMatch : () => setKeySheet({ open: true, mode: access.spaceHasKey ? "enter" : "set" })}
+            disabled={!canEdit && access.mode === "audience" && access.spaceHasKey}
+            accessibilityLabel={canEdit ? "New match" : "New match (needs the umpire key)"}
             style={({ pressed }) => ({
               height: 56,
               backgroundColor: colors.ink,
@@ -849,7 +934,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               alignItems: "center",
               justifyContent: "center",
               gap: 8,
-              opacity: pressed ? 0.95 : 1,
+              opacity:
+                !canEdit && access.spaceHasKey ? 0.4 : pressed ? 0.95 : 1,
               transform: [{ scale: pressed ? 0.98 : 1 }],
               shadowColor: "#000",
               shadowOpacity: 0.1,
@@ -867,11 +953,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 color: colors.bg,
               }}
             >
-              New Match
+              {canEdit || !access.spaceHasKey ? "New Match" : "New Match · Umpire key needed"}
             </Text>
           </Pressable>
+          {!canEdit && access.spaceHasKey ? (
+            <Text
+              style={{
+                fontSize: 11,
+                fontFamily: FONTS.sans,
+                color: colors.ink2,
+                textAlign: "center",
+              }}
+            >
+              Creating a match edits shared data — enter the umpire key to unlock it.
+            </Text>
+          ) : null}
         </View>
       </View>
+
+      {/* Umpire key sheet (audience → umpire entry point, 1.4.7) */}
+      <UmpireKeySheet
+        isOpen={keySheet.open}
+        mode={keySheet.mode}
+        onClose={() => setKeySheet((s) => ({ ...s, open: false }))}
+      />
     </SafeAreaView>
   );
 };

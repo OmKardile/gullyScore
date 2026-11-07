@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { Player, Team } from "../../types/cricket";
 import { db } from "../../storage/db";
+import { getAccessState, subscribeAccess } from "../../storage/access";
 import {
   calculatePlayerDetailedStats,
   DetailedPlayerProfileStats,
@@ -180,6 +181,13 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
   onOpenMatchDetail,
 }) => {
   const { colors } = useTheme();
+
+  // Umpire access (1.4.7): audience devices cannot edit or archive players.
+  const [canEdit, setCanEdit] = useState(getAccessState().mode !== "audience");
+  useEffect(
+    () => subscribeAccess(() => setCanEdit(getAccessState().mode !== "audience")),
+    []
+  );
   const [activeTab, setActiveTab] = useState<
     "overview" | "batting" | "bowling" | "matches" | "milestones"
   >("overview");
@@ -235,7 +243,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
   };
 
   const handleSaveEdit = () => {
-    if (!editName.trim()) return;
+    if (!editName.trim() || !canEdit) return;
     const updated: Player = {
       ...player,
       name: editName.trim(),
@@ -2250,7 +2258,12 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 variant="quiet"
                 fullWidth
                 onPress={() => {
-                  db.deleteOrArchivePlayer(player.id);
+                  if (!canEdit) return; // audience (1.4.7)
+                  try {
+                    db.deleteOrArchivePlayer(player.id);
+                  } catch {
+                    /* gate keeps audience out; belt & braces */
+                  }
                   onPlayerUpdated?.();
                   onClose();
                 }}

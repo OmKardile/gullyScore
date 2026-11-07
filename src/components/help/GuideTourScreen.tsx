@@ -9,8 +9,8 @@
  * - Rendered as a full-screen stack route (fade animation) with a dark
  *   scrim + centered card — works identically on Android/iOS/web and is
  *   fully reachable by the headless E2E suite (plain text + roles).
- * - 7 steps, one idea each: welcome, matches, scoring pad, teams,
- *   stats, sync spaces, help/FAQ/wipe.
+ * - 8 steps, one idea each: welcome, matches, scoring pad, teams,
+ *   stats, sync spaces, audience/umpire, help/FAQ/wipe.
  * - tourCompleted is persisted no matter HOW the screen is left
  *   (Finish, Skip, Android hardware back, iOS swipe) via a beforeRemove
  *   listener — the tour can never nag a user twice.
@@ -23,6 +23,7 @@ import {
   Calendar,
   ChartColumn,
   Cloud,
+  ShieldCheck,
   Target,
   Trophy,
   Users,
@@ -70,6 +71,11 @@ const STEPS: TourStep[] = [
     icon: Cloud,
     title: "Sync with friends (optional)",
     body: "In Settings, create a Sync Space and share its 8-character code. Friends who join sync the same matches. The code IS the account — and your data always stays on this device first.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Audience & umpire",
+    body: "Inside a Sync Space, everyone starts in view-only Audience mode. The space's umpire key unlocks scoring and edits — and every change lands in a readable Activity Log. Solo? You never see a key.",
   },
   {
     icon: BookOpen,

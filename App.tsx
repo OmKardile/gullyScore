@@ -31,6 +31,7 @@ import {
 import { useAppFonts } from "./src/design/fonts";
 import { db } from "./src/storage/db";
 import { initSync, maybeAutoSync } from "./src/storage/sync";
+import { initAccess } from "./src/storage/access";
 import { ThemeProvider, useTheme, FONTS } from "./src/design/theme";
 import { ErrorBoundary } from "./src/components/common/ErrorBoundary";
 import { HomeScreen } from "./src/components/home/HomeScreen";
@@ -45,6 +46,8 @@ import { HelpScreen } from "./src/components/help/HelpScreen";
 import { FaqScreen } from "./src/components/help/FaqScreen";
 import { GuideTourScreen } from "./src/components/help/GuideTourScreen";
 import { ComponentGalleryScreen } from "./src/components/gallery/ComponentGalleryScreen";
+import { ActivityLogScreen } from "./src/components/access/ActivityLogScreen";
+import { UmpiresScreen } from "./src/components/access/UmpiresScreen";
 
 type MainTab = "matches" | "teams" | "tournaments" | "stats";
 
@@ -60,6 +63,8 @@ export type RootStackParamList = {
   Faq: undefined;
   Guide: undefined;
   Gallery: undefined;
+  ActivityLog: { matchId?: string } | undefined;
+  Umpires: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -115,6 +120,7 @@ function MatchDetailRoute({
       matchId={route.params.matchId}
       onBack={() => navigation.goBack()}
       onResumeScoring={(mId) => navigation.navigate("Scoring", { matchId: mId })}
+      onOpenActivityLog={(mId) => navigation.navigate("ActivityLog", { matchId: mId })}
     />
   );
 }
@@ -129,6 +135,8 @@ function SettingsRoute({
       onOpenFaq={() => navigation.navigate("Faq")}
       onStartTour={() => navigation.navigate("Guide")}
       onOpenGallery={() => navigation.navigate("Gallery")}
+      onOpenActivityLog={() => navigation.navigate("ActivityLog", {})}
+      onOpenUmpires={() => navigation.navigate("Umpires")}
       onThemeChanged={() => {}}
     />
   );
@@ -155,6 +163,24 @@ function GalleryRoute({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Gallery">) {
   return <ComponentGalleryScreen onBack={() => navigation.goBack()} />;
+}
+
+function ActivityLogRoute({
+  navigation,
+  route,
+}: NativeStackScreenProps<RootStackParamList, "ActivityLog">) {
+  return (
+    <ActivityLogScreen
+      matchId={route.params?.matchId}
+      onBack={() => navigation.goBack()}
+    />
+  );
+}
+
+function UmpiresRoute({
+  navigation,
+}: NativeStackScreenProps<RootStackParamList, "Umpires">) {
+  return <UmpiresScreen onBack={() => navigation.goBack()} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,6 +333,7 @@ function Root() {
     setBootError(null);
     try {
       await db.init();
+      await initAccess(); // install identity + umpire session (1.4.7)
       await initSync(); // load Sync Space meta (Supabase) before first paint
       setBooted(true);
       // SYNC.md trigger: app-start pull-then-push when a space is configured.
@@ -435,12 +462,10 @@ function Root() {
       <Stack.Screen name="Settings" component={SettingsRoute} />
       <Stack.Screen name="Help" component={HelpRoute} />
       <Stack.Screen name="Faq" component={FaqRoute} />
-      <Stack.Screen
-        name="Guide"
-        component={GuideTourScreen}
-        options={{ animation: "fade" }}
-      />
+      <Stack.Screen name="Guide" component={GuideTourScreen} options={{ animation: "fade" }} />
       <Stack.Screen name="Gallery" component={GalleryRoute} />
+      <Stack.Screen name="ActivityLog" component={ActivityLogRoute} />
+      <Stack.Screen name="Umpires" component={UmpiresRoute} />
     </Stack.Navigator>
   );
 }

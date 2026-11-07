@@ -29,11 +29,13 @@ import {
   PushRow,
 } from "./cloud";
 import { db } from "./db";
+import { setSpaceConfigured } from "./access";
+import { ActivityLogEntry, SpaceKeyInfo, UmpireEntry } from "../types/access";
 import { Fixture, Match, Player, Team, Tournament } from "../types/cricket";
 
 const STORAGE_KEY = "gullyscore_sync_v1";
 
-export type SyncKind = "player" | "team" | "match" | "tournament" | "fixture";
+export type SyncKind = "player" | "team" | "match" | "tournament" | "fixture" | "umpire" | "log" | "spacekey";
 
 export interface SyncState {
   /** 8-char Sync Space code, null when not connected */
@@ -52,6 +54,9 @@ export interface SyncState {
   /** "" | "ok" | error message from the last sync */
   lastResult: string;
   lastSyncedCounts: { pushed: number; pulled: number };
+  /** Log rows are append-only, so they push incrementally: only rows with
+   *  updatedAt above this cursor go out (1.4.7). */
+  lastPushLogMs: number;
 }
 
 const DEFAULT_STATE: SyncState = {
@@ -64,6 +69,7 @@ const DEFAULT_STATE: SyncState = {
   lastSyncAt: 0,
   lastResult: "",
   lastSyncedCounts: { pushed: 0, pulled: 0 },
+  lastPushLogMs: 0,
 };
 
 let state: SyncState = { ...DEFAULT_STATE };
@@ -107,6 +113,18 @@ export async function initSync(): Promise<void> {
   } catch {
     state = { ...DEFAULT_STATE, deviceTag: newDeviceTag() };
   }
+  // Access gate input: does this device share a Sync Space? (Solo devices
+  // are never gated.) Also purge trimmed log rows from the remote id map
+  // without tombstoning them, and stamp any umpire session that ended
+  // without an explicit exit (kill / 12h expiry / rotation elsewhere).
+  setSpaceConfigured(!!state.code);
+  db.registerLogTrimHook((localIds) => {
+    for (const localId of localIds) {
+      if (state.idMap[localId]?.kind === "log") delete state.idMap[localId];
+    }
+    persist();
+  });
+  db.postBootAccessBookkeeping();
   notify();
   // Probe the Supabase backend once on boot — the Settings indicator shows
   // "Online · No Space" instead of reading like an offline failure.
@@ -166,6 +184,7 @@ export async function joinSpace(code: string): Promise<string> {
   if (!name) throw new CloudSyncError(`Space "${cleaned}" not found`);
   state = { ...state, code: cleaned, name, lastPullMs: 0, lastResult: "" };
   persist();
+  setSpaceConfigured(true);
   notify();
   // Joining starts from a full mirror: pull everything, then push local data.
   await syncNow();
@@ -176,6 +195,7 @@ export async function createNewSpace(name: string): Promise<string> {
   const code = await createSpace(name);
   state = { ...state, code, name, lastPullMs: 0, lastResult: "" };
   persist();
+  setSpaceConfigured(true);
   notify();
   await syncNow();
   return code;
@@ -190,6 +210,7 @@ export function leaveSpace() {
     tombstones: [],
   };
   persist();
+  setSpaceConfigured(false);
   notify();
 }
 
@@ -261,15 +282,19 @@ function applyPulledRow(row: PulledRow, remoteToLocal: Map<string, string>): boo
     const localId = rev.get(row.id);
     if (localId && state.idMap[localId]) {
       const kind = state.idMap[localId].kind;
-      db.removeSyncedEntity(kind, localId);
-      delete state.idMap[localId];
+      if (kind !== "spacekey") {
+        // The space key row is never tombstoned — a "deleted" payload for it
+        // is ignored (rotation upserts; there is nothing to remove).
+        db.removeSyncedEntity(kind, localId);
+        delete state.idMap[localId];
+      }
     }
     if (!state.tombstones.includes(row.id)) state.tombstones.push(row.id);
     return true;
   }
 
   const kind = String(row.kind);
-  if (!["player", "team", "match", "tournament", "fixture", "prediction"].includes(kind)) {
+  if (!"player|team|match|tournament|fixture|prediction|umpire|log|spacekey".includes(kind)) {
     return false; // unknown future kind — ignore, never corrupt local data
   }
   // Prediction rows are not stored by the RN app (v1). Skip BEFORE the id
@@ -281,6 +306,50 @@ function applyPulledRow(row: PulledRow, remoteToLocal: Map<string, string>): boo
       state.tombstones.push(row.id);
     }
     return false;
+  }
+
+  // Access-layer kinds (1.4.7). The space key hash, the umpires list and
+  // the activity log ride the same stream; the space key uses a canonical
+  // row id so every device converges on ONE row instead of one per device.
+  if (kind === "spacekey") {
+    if (payload.deleted === true) return true; // never tombstoned
+    db.applySyncedSpaceKey(payload as unknown as SpaceKeyInfo);
+    return true;
+  }
+  if (kind === "umpire") {
+    if (payload.deleted === true) {
+      const rev = reverseMap();
+      const localId = rev.get(row.id);
+      if (localId) {
+        db.removeSyncedEntity("umpire", localId);
+        delete state.idMap[localId];
+      }
+      return true;
+    }
+    const uLocalId = localIdForRemoteKey(row.id, "umpire");
+    const u = deepRemap(payload, remoteToLocal) as unknown as UmpireEntry;
+    u.id = uLocalId;
+    u.updatedAt = row.updatedAtMs;
+    db.applySyncedUmpire(u);
+    return true;
+  }
+  if (kind === "log") {
+    if (payload.deleted === true) {
+      const rev = reverseMap();
+      const localId = rev.get(row.id);
+      if (localId) {
+        db.removeSyncedEntity("log", localId);
+        delete state.idMap[localId];
+      }
+      return true;
+    }
+    if ((Number(payload.ts) || 0) <= db.getLogTrimWatermarkMs()) return false;
+    const lLocalId = localIdForRemoteKey(row.id, "log");
+    const e = deepRemap(payload, remoteToLocal) as unknown as ActivityLogEntry;
+    e.id = lLocalId;
+    e.updatedAt = row.updatedAtMs;
+    db.applySyncedActivity(e);
+    return true;
   }
   // Map remote key -> local id, remap all interior refs to local ids.
   const localId = localIdForRemoteKey(row.id, kind as SyncKind);
@@ -339,6 +408,16 @@ function localSnapshot(): Array<{ kind: SyncKind; entity: Record<string, unknown
   db.getMatches().forEach((m) => out.push({ kind: "match", entity: m as unknown as Record<string, unknown> }));
   db.getTournaments().forEach((t) => out.push({ kind: "tournament", entity: t as unknown as Record<string, unknown> }));
   db.getFixtures().forEach((f) => out.push({ kind: "fixture", entity: f as unknown as Record<string, unknown> }));
+  // Access layer (1.4.7): umpires list always in full (small, entries get
+  // end-stamped later); the space key hash row; and the activity log pushed
+  // INCREMENTALLY (append-only rows newer than the lastPushLogMs cursor) so
+  // a big log never re-uploads on every sync.
+  db.getUmpires().forEach((u) => out.push({ kind: "umpire", entity: u as unknown as Record<string, unknown> }));
+  const spaceKey = db.getSpaceKey();
+  if (spaceKey) out.push({ kind: "spacekey", entity: spaceKey as unknown as Record<string, unknown> });
+  db.getLogRowsNewerThan(state.lastPushLogMs).forEach((e) =>
+    out.push({ kind: "log", entity: e as unknown as Record<string, unknown> })
+  );
   return out;
 }
 
@@ -348,10 +427,18 @@ function buildPushRows(): { rows: PushRow[]; newTombstones: string[] } {
   const rows: PushRow[] = [];
 
   // 1. Assign/lookup remote keys first so interior refs remap completely.
+  // The space key row keeps its CANONICAL id on every device (no device
+  // prefix) — otherwise each device would push its own copy and rotation
+  // would fork into per-device rows.
   const localToRemote = new Map<string, string>();
   for (const item of snapshot) {
     const id = String(item.entity.id);
-    localToRemote.set(id, remoteKeyForLocalId(id, item.kind));
+    if (item.kind === "spacekey") {
+      localToRemote.set(id, "space.key");
+      state.idMap[id] = { key: "space.key", kind: "spacekey" };
+    } else {
+      localToRemote.set(id, remoteKeyForLocalId(id, item.kind));
+    }
   }
 
   // 2. Canonical payloads: every id inside the payload is the full remote key.
@@ -374,9 +461,13 @@ function buildPushRows(): { rows: PushRow[]; newTombstones: string[] } {
   //    the delete if the push failed offline, because tombstoned keys are
   //    never re-pushed. Keeping the idMap entries lets the next attempt
   //    regenerate the same tombstone rows (server upserts are idempotent).
+  //    Access-layer kinds are NEVER tombstoned: the space key is upserted,
+  //    and umpire/log rows are append-only mirrors (a local trim is a local
+  //    view, not a delete — the server keeps the full history).
   const stillLocal = new Set(localToRemote.values());
   const newTombstones: string[] = [];
   for (const [localId, entry] of Object.entries(state.idMap)) {
+    if (entry.kind === "spacekey" || entry.kind === "umpire" || entry.kind === "log") continue;
     if (stillLocal.has(entry.key)) continue;
     if (state.tombstones.includes(entry.key)) continue;
     rows.push({
@@ -458,6 +549,13 @@ export async function syncNow(): Promise<void> {
     state.lastSyncAt = Date.now();
     state.lastResult = "ok";
     state.lastSyncedCounts = { pushed: push.rows.length, pulled: applied };
+    // Advance the incremental log-push cursor: everything we just pushed (or
+    // pulled) is now known to the server, so only genuinely new rows go out
+    // next time.
+    state.lastPushLogMs = push.rows.reduce(
+      (m, r) => (r.kind === "log" ? Math.max(m, r.updatedAtMs) : m),
+      state.lastPushLogMs,
+    );
     persist();
     notify();
   } catch (e) {

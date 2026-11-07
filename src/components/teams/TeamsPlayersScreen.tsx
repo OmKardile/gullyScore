@@ -24,6 +24,7 @@ import {
   BowlingStyle,
 } from "../../types/cricket";
 import { db } from "../../storage/db";
+import { getAccessState, subscribeAccess } from "../../storage/access";
 import {
   GullyButton,
   GullySegmented,
@@ -63,6 +64,13 @@ export const TeamsPlayersScreen: React.FC = () => {
   const [players, setPlayers] = useState<Player[]>(() => db.getPlayers());
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Umpire access (1.4.7): audience devices cannot add/edit/delete.
+  const [canEdit, setCanEdit] = useState(getAccessState().mode !== "audience");
+  useEffect(
+    () => subscribeAccess(() => setCanEdit(getAccessState().mode !== "audience")),
+    []
+  );
+
   // Modals & Drawers
   const [showAddTeamModal, setShowAddTeamModal] = useState<boolean>(false);
   const [showAddPlayerModal, setShowAddPlayerModal] = useState<boolean>(false);
@@ -96,6 +104,7 @@ export const TeamsPlayersScreen: React.FC = () => {
   }, []);
 
   const handleCreateTeam = () => {
+    if (!canEdit) return;
     if (!newTeamName.trim()) return;
     const short =
       newTeamShort.trim() ||
@@ -123,6 +132,7 @@ export const TeamsPlayersScreen: React.FC = () => {
   };
 
   const handleCreatePlayer = () => {
+    if (!canEdit) return;
     if (!newPlayerName.trim()) return;
     const player: Player = {
       id: `p_${Date.now()}`,
@@ -198,11 +208,12 @@ export const TeamsPlayersScreen: React.FC = () => {
         <GullyButton
           size="sm"
           variant="primary"
+          disabled={!canEdit}
           onPress={() =>
             activeTab === "teams" ? setShowAddTeamModal(true) : setShowAddPlayerModal(true)
           }
         >
-          {activeTab === "teams" ? "Team" : "Player"}
+          {canEdit ? (activeTab === "teams" ? "Team" : "Player") : "Umpire key needed"}
         </GullyButton>
       </View>
 
@@ -735,7 +746,11 @@ export const TeamsPlayersScreen: React.FC = () => {
               variant="quiet"
               fullWidth
               onPress={() => {
-                db.deleteOrArchiveTeam(selectedTeam.id);
+                try {
+                  db.deleteOrArchiveTeam(selectedTeam.id);
+                } catch (err) {
+                  console.warn("deleteOrArchiveTeam blocked:", err instanceof Error ? err.message : err);
+                }
                 refreshData();
                 setSelectedTeam(null);
               }}

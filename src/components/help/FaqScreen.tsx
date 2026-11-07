@@ -107,6 +107,36 @@ const FAQ_SECTIONS: { label: string; items: FaqItem[] }[] = [
       },
     ],
   },
+  {
+    label: "Audience & Umpire",
+    items: [
+      {
+        id: "faq_audience_mode",
+        q: "Why can't I edit anything? What is Audience mode?",
+        a: "If your device is joined to a Sync Space, it starts in view-only Audience mode: scores, stats, teams and the activity log are all readable, but scoring and edits are locked. It's a guard against a friend's phone accidentally rewriting the score. Enter the space's umpire key (Settings → Umpire Access) to unlock editing as the umpire. Devices not in a Sync Space are never gated — it's your own data.",
+      },
+      {
+        id: "faq_umpire_key",
+        q: "What is the umpire key and who has it?",
+        a: "Each Sync Space has one umpire key — 16 characters, set by the space's creator when the space is made (or the first person to set one, for spaces created before this feature). Only the key's hash is ever stored or synced, and it's shown exactly once when set, so save it. An umpire can change it from Settings, which instantly ends every other umpire session. Be honest about what this is: a deterrent against casual or accidental edits, not bank-grade security.",
+      },
+      {
+        id: "faq_activity_log",
+        q: "What is the Activity Log?",
+        a: "A plain-words, append-only history of every change made by umpires — 'Rahul scored FOUR — over 12.3', wickets, corrections, reopened matches, key changes. Entries are grouped by match and day, searchable, and show who made the change on which device. Everyone in the space can read it, including viewers.",
+      },
+      {
+        id: "faq_completed_lock",
+        q: "Why is my completed match read-only?",
+        a: "Once a match ends it locks — even for umpires — so the recorded result can't drift after the handshake. Genuinely need a correction? Reopen the match from its detail screen; you'll be asked for a short reason, which is written to the Activity Log next to your name.",
+      },
+      {
+        id: "faq_lost_key",
+        q: "I lost the umpire key. What now?",
+        a: "Recovery is manual by design — there is no backdoor. Contact the developer with proof you own the space (e.g. its creation details); the key hash can be reset from the database side. If another umpire still has an active session, they can also set a fresh key from Settings → Change Umpire Key before everyone is locked out.",
+      },
+    ],
+  },
 ];
 
 export const FaqScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
