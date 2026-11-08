@@ -21,6 +21,7 @@ import {
   Pressable,
   StatusBar,
   ActivityIndicator,
+  AppState,
 } from "react-native";
 import { Calendar, Users, Trophy, ChartColumn } from "lucide-react-native";
 import { NavigationContainer, useNavigation } from "@react-navigation/native";
@@ -31,7 +32,7 @@ import {
 import { useAppFonts } from "./src/design/fonts";
 import { db } from "./src/storage/db";
 import { initSync, maybeAutoSync } from "./src/storage/sync";
-import { initAccess } from "./src/storage/access";
+import { initAccess, getAccessState } from "./src/storage/access";
 import { ThemeProvider, useTheme, FONTS } from "./src/design/theme";
 import { ErrorBoundary } from "./src/components/common/ErrorBoundary";
 import { HomeScreen } from "./src/components/home/HomeScreen";
@@ -363,6 +364,29 @@ function Root() {
       navigation.navigate("Guide");
     }
   }, [booted, fontsReady, navigation]);
+
+  // ── Umpire-session expiry heartbeat (1.4.7-test-3 review fix) ──────────
+  // Expiry used to be purely lazy (checked only when something read the
+  // access state), so an app left open across the 12h boundary kept showing
+  // a stale umpire badge + canEdit flags until the next tap. A foreground
+  // listener + a 1-minute heartbeat run the expiry check (and the honest
+  // end-of-session bookkeeping) on their own; notify() updates every
+  // subscribed screen the moment the session lapses.
+  useEffect(() => {
+    if (!booted) return;
+    const beat = () => {
+      getAccessState(); // runs expireIfNeeded() → notify() on change
+      db.postBootAccessBookkeeping(); // stamps + logs a lapsed session once
+    };
+    const timer = setInterval(beat, 60_000);
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") beat();
+    });
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
+  }, [booted]);
 
   if (bootError) {
     return (

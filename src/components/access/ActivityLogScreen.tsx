@@ -103,6 +103,7 @@ function isUmpireChange(a: ActivityAction): boolean {
   return (
     a === "umpire_entered" ||
     a === "umpire_exited" ||
+    a === "umpire_switched" ||
     a === "key_set" ||
     a === "key_rotated" ||
     a === "key_upgraded"
@@ -401,7 +402,18 @@ export const ActivityLogScreen: React.FC<ActivityLogScreenProps> = ({
                         lineHeight: 19,
                       }}
                     >
-                      <Text style={{ fontFamily: FONTS.sansSemiBold }}>{e.actorName}</Text> {e.detail}
+                      {e.action === "umpire_switched" ? (
+                        /* The handover sentence already names both people
+                         * ("Rahul handed over to Amit") — prefixing the
+                         * actor would mangle it into "Amit Rahul handed over
+                         * to Amit". */
+                        e.detail
+                      ) : (
+                        <>
+                          <Text style={{ fontFamily: FONTS.sansSemiBold }}>{e.actorName}</Text>{" "}
+                          {e.detail}
+                        </>
+                      )}
                     </Text>
                     <Text
                       style={{

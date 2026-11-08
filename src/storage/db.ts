@@ -233,11 +233,48 @@ class GullyDb {
     this.listeners.forEach((l) => l());
   }
 
+  /** Last device-storage write failure, in plain words (null = healthy).
+   *  Set by persist() when AsyncStorage rejects (disk full, quota, etc.) —
+   *  in-memory state still advances, so without this signal the change
+   *  silently vanishing on restart looked like "scoring didn't save".
+   *  Screens (scoring banner) read it via getPersistFailure(); the next
+   *  successful write clears it. */
+  private persistFailure: string | null = null;
+
+  public getPersistFailure(): string | null {
+    return this.persistFailure;
+  }
+
   private persist(key: string, data: unknown) {
     try {
-      AsyncStorage.setItem(key, JSON.stringify(data)).catch(() => {});
+      AsyncStorage.setItem(key, JSON.stringify(data))
+        .then(() => {
+          if (this.persistFailure !== null) {
+            this.persistFailure = null;
+            this.notify();
+          }
+        })
+        .catch((e) => {
+          const msg = `Couldn't save to device storage (${key.replace(
+            "gullyscore_",
+            ""
+          )}) — this change may be lost if the app restarts. ` +
+            `Try freeing up space. (${e instanceof Error ? e.message : String(e)})`;
+          if (this.persistFailure !== msg) {
+            this.persistFailure = msg;
+            this.notify();
+          }
+        });
     } catch (e) {
-      console.error("Failed to persist key:", key, e);
+      const msg = `Couldn't save to device storage (${key.replace(
+        "gullyscore_",
+        ""
+      )}) — this change may be lost if the app restarts. ` +
+        `(${e instanceof Error ? e.message : String(e)})`;
+      if (this.persistFailure !== msg) {
+        this.persistFailure = msg;
+        this.notify();
+      }
     }
   }
 
@@ -366,12 +403,14 @@ class GullyDb {
       return false; // archived
     } else {
       delete this.players[id];
-      // remove from teams
+      // remove from teams — any team whose roster CHANGED gets a fresh
+      // updatedAt, including one left empty (an empty-but-mutated roster
+      // with a stale cursor could resurrect the deleted id from an older
+      // cloud row on the next LWW merge).
       Object.values(this.teams).forEach((t) => {
+        const before = t.playerIds.length;
         t.playerIds = t.playerIds.filter((p) => p !== id);
-      });
-      Object.values(this.teams).forEach((t) => {
-        if (t.playerIds.length) t.updatedAt = Date.now();
+        if (t.playerIds.length !== before) t.updatedAt = Date.now();
       });
       this.persist(STORAGE_KEY_PLAYERS, this.players);
       this.persist(STORAGE_KEY_TEAMS, this.teams);
@@ -944,7 +983,14 @@ class GullyDb {
     };
     this.persist(STORAGE_KEY_SPACE_KEY, this.spaceKey);
     setSpaceKeyHash(this.spaceKey.keyHash);
-    beginUmpireSession({ name: actor.name, keyHash: this.spaceKey.keyHash, persistFor12h: getAccessState().stayFor12h });
+    // Carry the CURRENT session's 12-hour choice over the rotation (the
+    // dead stayFor12h pref was always false — a rotating umpire on a 12h
+    // session silently lost persistence until restart).
+    beginUmpireSession({
+      name: actor.name,
+      keyHash: this.spaceKey.keyHash,
+      persistFor12h: getAccessState().session?.expiresAt != null,
+    });
     this.logActivity("key_rotated", {
       detail: "Changed the umpire key — other umpire sessions ended",
       actor,
@@ -1120,13 +1166,17 @@ class GullyDb {
 
   private appendUmpireEntry(actor: { name: string; tag: string; model: string }) {
     const id = `u_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    // The entry's startedAt is the SESSION's startedAt (passed in), so the
+    // "(you)" tag in the Umpires list can match exactly — two separate
+    // Date.now() calls were ~1ms apart and the tag only showed sometimes.
+    const ts = getAccessState().session?.startedAt ?? Date.now();
     this.umpires[id] = {
       id,
       name: actor.name,
       tag: actor.tag,
       model: actor.model,
-      startedAt: Date.now(),
-      updatedAt: Date.now(),
+      startedAt: ts,
+      updatedAt: ts,
     };
     this.persist(STORAGE_KEY_UMPIRES, this.umpires);
   }
@@ -1391,9 +1441,10 @@ class GullyDb {
       this.matches = { ...this.matches, ...matches.clean };
       this.tournaments = { ...this.tournaments, ...tournaments.clean };
       this.fixtures = { ...this.fixtures, ...fixtures.clean };
-      // Access-layer mirrors (1.4.7): merged only when well-formed. The
-      // key hash rides along (it is synced data, not a secret) but backups
-      // created before 1.4.7 simply don't carry these fields — that's fine.
+      // Access-layer mirrors (1.4.7): merged only when well-formed. Backups
+      // deliberately do NOT carry the space key (even hashed) or sessions —
+      // access state arrives only via Sync Space rows; pre-1.4.7 backups
+      // simply don't have these fields, which is fine.
       if (parsed.umpires && typeof parsed.umpires === "object" && !Array.isArray(parsed.umpires)) {
         const validUmpires = Object.values(parsed.umpires as Record<string, unknown>).filter(
           (u): u is UmpireEntry =>

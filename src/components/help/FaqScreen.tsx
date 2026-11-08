@@ -78,7 +78,7 @@ const FAQ_SECTIONS: { label: string; items: FaqItem[] }[] = [
       {
         id: "faq_last_man",
         q: "What is Last-Man-Batting?",
-        a: "A common gully rule. Normally an innings ends when the side is all out (players minus one wickets down). With Last-Man-Batting enabled, the last remaining batter keeps batting alone — the innings only ends on overs or retirement.",
+        a: "A common gully rule. Normally an innings ends when the side is all out (players minus one wickets down). With Last-Man-Batting enabled, the last remaining batter keeps batting alone — the innings only ends on overs or retirement. Short squads are handled honestly too: a side with fewer registered players than the match format is all out the moment it runs out of batters — a 7-player side in an 11-a-side match is all out at 6 wickets.",
       },
     ],
   },

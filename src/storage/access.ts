@@ -483,7 +483,9 @@ export function registerWrongKeyAttempt(): { locked: boolean; lockedForMs: numbe
   return { locked: false, lockedForMs: 0 };
 }
 
-/** A successful entry (or sheet dismissal) resets the attempt counter. */
+/** A successful entry resets the attempt counter. (Sheet dismissal does NOT
+ *  — the counter survives a dismissed sheet, so a guess-and-reopen loop
+ *  still hits the lockout; only entering the right key clears it.) */
 export function clearWrongAttempts() {
   if (wrongAttempts === 0 && lockedUntil === 0) return;
   wrongAttempts = 0;

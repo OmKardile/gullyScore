@@ -166,12 +166,14 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
 
   const potmPlayer = playersMap[topMvpPlayerId];
 
-  // Shot directions for wagon wheel
+  // Shot directions for wagon wheel — "pitch" (Defended) is a real answer
+  // with no scoring direction, so the wheel skips it (it used to fall back
+  // to the "straight" angle and paint defended balls as straight hits).
   const allShots = useMemo(() => {
     const shots: Array<{ direction: string; runs: number }> = [];
     match.innings.forEach((inn) => {
       inn.ballEvents.forEach((b) => {
-        if (b.shotDirection) {
+        if (b.shotDirection && b.shotDirection !== "pitch") {
           shots.push({ direction: b.shotDirection, runs: b.runsBat });
         }
       });
@@ -992,7 +994,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                     }}
                   >
                     <Text style={{ fontFamily: FONTS.serif, fontWeight: "700", fontSize: 12, color: colors.ink }}>
-                      {b.overNumber}.{b.ballInOver}
+                      {b.overNumber + 1}.{b.ballInOver}
                     </Text>
                     <Text
                       numberOfLines={1}

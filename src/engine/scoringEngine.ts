@@ -483,8 +483,23 @@ export function replayInnings(
   const battedPlayerIds = new Set(Object.keys(battersMap));
   const didNotBatPlayerIds = battingSquadIds.filter((id) => !battedPlayerIds.has(id));
 
-  // Determine completion status
-  const maxWickets = rules.lastManBatting ? rules.playersPerSide : rules.playersPerSide - 1;
+  // Determine completion status. A side is all out at playersPerSide−1
+  // wickets (playersPerSide with last-man) — but never later than the SQUAD
+  // allows: a 7-player side in an "11-a-side" match is all out at 6, because
+  // nobody is left to come in. Short squads are common gully reality;
+  // without this, a short side's last wicket left a dismissed batter
+  // stranded at the crease (credited with further balls) or deadlocked the
+  // legacy crease-rescue sheet (1.4.7-test-3 review round 2).
+  const rulesMaxWickets = rules.lastManBatting
+    ? rules.playersPerSide
+    : rules.playersPerSide - 1;
+  const maxWickets = Math.max(
+    1,
+    Math.min(
+      rulesMaxWickets,
+      battingSquadIds.length - (rules.lastManBatting ? 0 : 1)
+    )
+  );
   const maxLegalBalls = rules.overs * 6;
 
   let isCompleted = false;

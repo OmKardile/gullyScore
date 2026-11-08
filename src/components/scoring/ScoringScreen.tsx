@@ -239,8 +239,8 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // Bowler selection state
   const [selectedNextBowlerId, setSelectedNextBowlerId] = useState<string>("");
 
-  // Edit ball log state
-  const [editingBall, setEditingBall] = useState<BallEvent | null>(null);
+  // (Edit-ball UI was folded into Delete in the ball log sheet — no separate
+  // editing state needed; deleting + re-recording is the event-sourced way.)
 
   // ── Save-error banner (1.4.7-test-3): every failed db write is shown here,
   //  explained in plain words — no silent failures, no crashes.
@@ -301,6 +301,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       // skips the hooks after it — React "fewer hooks" crash + ErrorBoundary.
       if (m) setMatch(m);
       setPlayersMap(db.getPlayersMap());
+      // Device-storage write failures (disk full, etc.) surface here too —
+      // the in-memory state advances but the change may vanish on restart.
+      // Without this the failure was invisible (the old persist() swallowed
+      // it), which looked exactly like the "scoring didn't save" report.
+      const persistErr = db.getPersistFailure();
+      if (persistErr) setSaveError(persistErr);
     });
     return unsub;
   }, [matchId]);
@@ -456,9 +462,18 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     return calculateLiveWinProbability(match, scorecard, firstInningsTotal);
   }, [match, scorecard, firstInningsTotal]);
 
-  const totalPossibleWickets = match.rules.lastManBatting
-    ? match.rules.playersPerSide
-    : match.rules.playersPerSide - 1;
+  // Squad-aware wickets ceiling (mirrors the engine's short-side all-out:
+  // a 7-player side in an 11-a-side match only HAS 6 wickets to lose).
+  const battingSquadLen = battingSquadIds.length;
+  const totalPossibleWickets = Math.max(
+    1,
+    Math.min(
+      match.rules.lastManBatting
+        ? match.rules.playersPerSide
+        : match.rules.playersPerSide - 1,
+      battingSquadLen - (match.rules.lastManBatting ? 0 : 1)
+    )
+  );
 
   const projectedScore = useMemo(() => {
     return calculateProjectedScore(
@@ -517,7 +532,16 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       let winnerTeamId: string | undefined = undefined;
 
       if (inn2.totalRuns > inn1.totalRuns) {
-        const wicketsRemaining = match.rules.playersPerSide - 1 - inn2.totalWickets;
+        // Squad-aware: a short side's "by N wickets" counts only the
+        // wickets it could actually have lost (engine short-side all-out).
+        const maxSideWickets = Math.max(
+          1,
+          Math.min(
+            match.rules.playersPerSide - 1,
+            battingSquadIds.length - 1
+          )
+        );
+        const wicketsRemaining = maxSideWickets - inn2.totalWickets;
         resultText = `${bowlingTeam?.name || "The chasing team"} chased target to win by ${wicketsRemaining} wicket(s)`;
         winnerTeamId = currentInningsData.battingTeamId;
       } else if (inn2.totalRuns < inn1.totalRuns) {
@@ -678,6 +702,17 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         liveBattingSquadIds,
         liveBowlingSquadIds
       );
+      // Legacy log ending on a dismissal (pre-1.4.7-test-3 import): the
+      // incoming batter is unknown. NEVER credit the next ball to the
+      // dismissed player — ask for the crease first, even if the user
+      // dismissed the automatic rescue sheet.
+      if (!liveInn.strikerId && liveCrease?.pendingBatter && !liveSc.isCompleted) {
+        setWicketStep("next_batter");
+        setReplacementOnly(true);
+        setSelectedNextBatterId("");
+        setShowWicketSheet(true);
+        return;
+      }
       const liveStrikerId =
         liveInn.strikerId || liveCrease?.strikerId || liveBattingSquadIds[0] || "";
       const liveNonStrikerId =
@@ -974,7 +1009,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
   // matches whose log ends on a wicket) only sets the crease — no new ball.
   const handleConfirmWicket = () => {
     if (replacementOnly) {
-      if (!selectedNextBatterId) return;
+      // No pick needed when NOBODY is available (short side): confirm the
+      // crease as derived. Review round 2: the old hard return deadlocked
+      // the pad here — every scoring tap re-opened this sheet and the
+      // enabled Confirm no-opped with nothing selected.
+      if (!selectedNextBatterId && availableNextBatters.length > 0) return;
       if (!canEdit()) {
         resetWicketSheet();
         return;
@@ -990,11 +1029,35 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         resetWicketSheet();
         return;
       }
-      let striker = liveInn.strikerId || last.strikerId;
-      let nonStriker = liveInn.nonStrikerId || last.nonStrikerId;
+      // Derive the post-ball crease (odd-run swap + over-end swap applied),
+      // NOT the raw last-ball striker/nonStriker: on a crossing run-out the
+      // dismissed batter may have ended at either end, and the incoming
+      // batter must replace them at the end they actually vacated.
+      const liveBattingSquadIds =
+        liveInn.battingTeamId === liveMatch.teamAId
+          ? liveMatch.teamAPlayerIds
+          : liveMatch.teamBPlayerIds;
+      const liveBowlingSquadIds =
+        liveInn.bowlingTeamId === liveMatch.teamAId
+          ? liveMatch.teamAPlayerIds
+          : liveMatch.teamBPlayerIds;
+      const derivedCrease = deriveLiveCrease(
+        liveInn.ballEvents,
+        liveMatch.rules,
+        liveBattingSquadIds,
+        liveBowlingSquadIds
+      );
+      let striker = derivedCrease?.strikerId || last.strikerId || liveInn.strikerId || "";
+      let nonStriker = derivedCrease?.nonStrikerId || last.nonStrikerId || liveInn.nonStrikerId || "";
       const dismissedId = last.wicket.dismissedPlayerId;
-      if (dismissedId === striker) striker = selectedNextBatterId;
-      else nonStriker = selectedNextBatterId;
+      if (selectedNextBatterId) {
+        if (dismissedId === striker) striker = selectedNextBatterId;
+        else if (dismissedId === nonStriker) nonStriker = selectedNextBatterId;
+        else if (last.wicket.dismissedEnd === "non_striker") nonStriker = selectedNextBatterId;
+        else striker = selectedNextBatterId; // dismissed not in the crease — striker end by default
+      }
+      // else: no replacement available — the crease stands as derived and the
+      // user explicitly confirmed it (short squad).
       const updatedInnings = [...liveMatch.innings];
       updatedInnings[liveMatch.currentInningsIndex] = {
         ...liveInn,
@@ -1010,7 +1073,9 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
       sessionEditedRef.current = true;
       db.logActivity("crease_set", {
         matchId,
-        detail: `set ${playersMap[selectedNextBatterId]?.name || "the incoming batter"} at the crease (recorded before crease tracking)`,
+        detail: selectedNextBatterId
+          ? `set ${playersMap[selectedNextBatterId]?.name || "the incoming batter"} at the crease (recorded before crease tracking)`
+          : "confirmed the crease with no replacement available (short squad)",
         correction: true,
       });
       resetWicketSheet();
@@ -1018,9 +1083,13 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
     }
 
     const isRunOut = selectedWicketType === "run_out";
-    const dismissedId = isRunOut
-      ? dismissedBatterId || strikerId
-      : strikerId; // for bowled, lbw, caught, striker is dismissed
+    // Retired hurt / retired out can be EITHER batter — the flow asks which
+    // one is leaving (the old flow always dismissed the striker, so retiring
+    // the non-striker silently replaced the wrong batter at the crease).
+    const isRetired =
+      selectedWicketType === "retired_hurt" || selectedWicketType === "retired_out";
+    const dismissedId =
+      isRunOut || isRetired ? dismissedBatterId || strikerId : strikerId;
 
     const wicketInfo: DismissalInfo = {
       type: selectedWicketType,
@@ -2045,7 +2114,10 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
         onClose={() => {
           // Dismissing mid-flow is a cancel: clear the selections so a
           // later wicket doesn't inherit stale fielders/batters, and never
-          // leave replacementOnly armed.
+          // leave replacementOnly armed. (The legacy pending-batter rescue
+          // stays one-shot here by design — but recordBall re-asks if the
+          // user tries to score before setting the crease, so a dismissed
+          // batter can never be credited with another ball.)
           resetWicketSheet();
         }}
         title={replacementOnly ? "Set the Crease" : "Record Dismissal"}
@@ -2082,12 +2154,16 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                           opt.type === "stumped"
                         ) {
                           setWicketStep("fielder");
+                        } else if (opt.type === "retired_hurt" || opt.type === "retired_out") {
+                          // Retiring can be EITHER batter — ask who is
+                          // leaving before picking the replacement (the old
+                          // flow always dismissed the striker).
+                          setDismissedBatterId("");
+                          setWicketStep("batter");
                         } else {
-                          // Every dismissal — including Retired Hurt — needs
-                          // a replacement at the crease (the retired batter
-                          // stays available to return later since retired-hurt
-                          // is not out). The old flow recorded the ball with
-                          // the retired batter STILL at the crease.
+                          // Every dismissal needs a replacement at the crease
+                          // (the retired batter stays available to return
+                          // later since retired-hurt is not out).
                           setWicketStep("next_batter");
                         }
                       }}
@@ -2204,12 +2280,21 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           </View>
         )}
 
-        {wicketStep === "batter" && selectedWicketType === "run_out" && (
+        {wicketStep === "batter" &&
+          (selectedWicketType === "run_out" ||
+            selectedWicketType === "retired_hurt" ||
+            selectedWicketType === "retired_out") && (
           <View style={{ flexDirection: "column", gap: 16 }}>
-            <Text style={sheetLabel}>Run Out Details</Text>
+            <Text style={sheetLabel}>
+              {selectedWicketType === "run_out" ? "Run Out Details" : "Which Batter Is Retiring?"}
+            </Text>
 
             <View>
-              <Text style={fieldLabel}>Which batter was dismissed?</Text>
+              <Text style={fieldLabel}>
+                {selectedWicketType === "run_out"
+                  ? "Which batter was dismissed?"
+                  : "Who is leaving the crease?"}
+              </Text>
               <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
                 <Pressable
                   onPress={() => {
@@ -2260,10 +2345,11 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
               </View>
             </View>
 
-            <View>
-              <Text style={fieldLabel}>Runs completed before run out:</Text>
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
-                {[0, 1, 2, 3].map((r) => (
+            {selectedWicketType === "run_out" && (
+              <View>
+                <Text style={fieldLabel}>Runs completed before run out:</Text>
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+                  {[0, 1, 2, 3].map((r) => (
                   <Pressable
                     key={r}
                     onPress={() => setRunOutCompletedRuns(r)}
@@ -2295,15 +2381,18 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                     </Text>
                   </Pressable>
                 ))}
+                </View>
               </View>
-            </View>
+            )}
+            {/* Retiring carries no completed runs — runOutCompletedRuns stays 0. */}
 
             <GullyButton
               variant="primary"
               fullWidth
+              disabled={!dismissedBatterId && !!strikerId && !!nonStrikerId}
               onPress={() => setWicketStep("next_batter")}
             >
-              Next: Select New Batter
+              {selectedWicketType === "run_out" ? "Next: Select New Batter" : "Next: Select Replacement"}
             </GullyButton>
           </View>
         )}
@@ -2317,8 +2406,9 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
             </Text>
             {selectedWicketType === "retired_hurt" ? (
               <Text style={{ fontSize: 11, color: colors.ink2, fontFamily: FONTS.sans }}>
-                Retired hurt is not out — {strikerPlayer?.name || "the batter"} can come back
-                later. The replacement takes the crease now.
+                Retired hurt is not out —{" "}
+                {playersMap[dismissedBatterId || strikerId]?.name || "the retiring batter"} can
+                come back later. The replacement takes the crease now.
               </Text>
             ) : null}
             <ScrollView
@@ -2335,7 +2425,10 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                     fontStyle: "italic",
                   }}
                 >
-                  No more batters available (Innings completed or all out).
+                  No more batters available (Innings completed or all out)
+                  {replacementOnly
+                    ? " — short squad: confirm to keep the recorded crease and continue."
+                    : ""}
                 </Text>
               ) : (
                 availableNextBatters.map((pId) => {
@@ -2504,7 +2597,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                         fontFamily: FONTS.sans,
                       }}
                     >
-                      Over {ball.overNumber}.{ball.ballInOver} — {ball.commentaryText}
+                      Over {ball.overNumber + 1}.{ball.ballInOver} — {ball.commentaryText}
                     </Text>
                     <Text style={{ fontSize: 11, color: colors.ink2 }}>
                       {str} facing {bwl} · {ball.runsBat} run(s)
@@ -2579,7 +2672,10 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
               Where was that boundary hit?
             </Text>
 
-            {/* Circular Shot Direction Selector */}
+            {/* Circular Shot Direction Selector — "Defended" (pitch) is a
+                declared ShotDirection: an honest answer the wagon wheel skips
+                (no scoring direction), instead of an invalid value cast into
+                the union. */}
             <View style={{ flexDirection: "column", gap: 8, width: "100%", marginBottom: 16 }}>
               {chunked(
                 [
@@ -2592,14 +2688,14 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                   { dir: "cover", label: "Cover" },
                   { dir: "long_off", label: "Long Off" },
                   { dir: "mid_wicket", label: "Mid Wicket" },
-                ],
+                ] as Array<{ dir: ShotDirection; label: string }>,
                 3
               ).map((row, rowIndex) => (
                 <View key={rowIndex} style={{ flexDirection: "row", gap: 8 }}>
                   {row.map((item) => (
                     <Pressable
                       key={item.dir}
-                      onPress={() => handleSaveShotDirection(item.dir as ShotDirection)}
+                      onPress={() => handleSaveShotDirection(item.dir)}
                       style={({ pressed }) => ({
                         flex: 1,
                         height: 44,

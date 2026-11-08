@@ -109,7 +109,20 @@ export function calculateLiveWinProbability(
   const maxBalls = totalOvers * 6;
   const ballsBowled = currentScorecard.legalBallsCount;
   const ballsRemaining = Math.max(0, maxBalls - ballsBowled);
-  const totalWickets = rules.lastManBatting ? rules.playersPerSide : rules.playersPerSide - 1;
+  // Squad-aware wickets ceiling (mirrors the engine's short-side all-out:
+  // a 7-player side in an 11-a-side match only HAS 6 wickets to lose).
+  const battingSquadLen = (
+    match.innings[currentInningsIdx]?.battingTeamId === match.teamAId
+      ? match.teamAPlayerIds
+      : match.teamBPlayerIds
+  ).length;
+  const totalWickets = Math.max(
+    1,
+    Math.min(
+      rules.lastManBatting ? rules.playersPerSide : rules.playersPerSide - 1,
+      battingSquadLen - (rules.lastManBatting ? 0 : 1)
+    )
+  );
   const wicketsLost = currentScorecard.totalWickets;
   const wicketsInHand = Math.max(0, totalWickets - wicketsLost);
 

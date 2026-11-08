@@ -203,6 +203,9 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
   // single editTeamId seeded with only the FIRST team silently removed the
   // player from every other team on save.
   const [editTeamIds, setEditTeamIds] = useState<string[]>([]);
+  // Save failures (expired umpire session, storage error) shown inline —
+  // never swallowed, never crashing.
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Reset any half-finished edit form when a DIFFERENT player is opened:
   // this modal stays mounted (returns null) when closed, so edit state used
@@ -214,6 +217,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
     setEditName("");
     setEditNickname("");
     setEditTeamIds([]);
+    setEditError(null);
   }, [playerId]);
 
   const allMatches = db.getMatches();
@@ -239,6 +243,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
     setEditBowlStyle(player.bowlingStyle);
     // Seed with ALL current teams — saving untouched keeps memberships intact.
     setEditTeamIds(teams.map((t) => t.id));
+    setEditError(null);
     setIsEditing(true);
   };
 
@@ -252,43 +257,64 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
       battingHand: editBatHand,
       bowlingStyle: editBowlStyle,
     };
-    db.savePlayer(updated);
+    // Every db write is wrapped: an expired umpire session (12h window
+    // passing with the sheet open) throws AudienceModeError inside this
+    // onPress — uncaught, that killed the app instead of showing a message.
+    try {
+      db.savePlayer(updated);
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : String(e));
+      return;
+    }
 
     // Set team memberships to EXACTLY the selected teams. Previously this
     // block kept only the single editTeamId — a multi-team player lost
     // every other membership on save — and "no team" skipped the block
     // entirely (a silent no-op). An empty selection now removes the player
     // from all rosters, which the chip labels make explicit.
-    allTeams.forEach((t) => {
-      const has = t.playerIds.includes(player.id);
-      const wants = editTeamIds.includes(t.id);
-      if (wants && !has) {
-        t.playerIds.push(player.id);
-        db.saveTeam(t);
-      } else if (!wants && has) {
-        t.playerIds = t.playerIds.filter((id) => id !== player.id);
-        db.saveTeam(t);
-      }
-    });
+    // New team objects are built instead of mutating the live db rows, so
+    // a failed save can't leave an in-memory roster corrupted.
+    try {
+      allTeams.forEach((t) => {
+        const has = t.playerIds.includes(player.id);
+        const wants = editTeamIds.includes(t.id);
+        if (wants && !has) {
+          db.saveTeam({ ...t, playerIds: [...t.playerIds, player.id] });
+        } else if (!wants && has) {
+          db.saveTeam({ ...t, playerIds: t.playerIds.filter((id) => id !== player.id) });
+        }
+      });
+    } catch (e) {
+      setEditError(
+        `Saved the player, but couldn't update team rosters — ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+      onPlayerUpdated?.();
+      return;
+    }
 
+    setEditError(null);
     setIsEditing(false);
     onPlayerUpdated?.();
   };
 
   const roleLabelMap: Record<string, string> = {
-    pure_batter: "Batter",
+    batsman: "Batter",
+    bowler: "Bowler",
     all_rounder: "All-Rounder",
-    strike_bowler: "Bowler",
     wicket_keeper: "Wicketkeeper",
   };
 
   const bowlStyleLabelMap: Record<string, string> = {
     rf: "Right-arm Fast",
     rm: "Right-arm Medium",
-    rs: "Right-arm Spin",
+    spin_off: "Off Spin",
+    spin_leg: "Leg Spin",
     lf: "Left-arm Fast",
     lm: "Left-arm Medium",
-    ls: "Left-arm Spin",
+    sla: "Slow Left-arm",
+    other: "Other",
   };
 
   // Shared text styles (web cascaded font-sans / ink from the sheet container; RN sets per-Text)
@@ -745,13 +771,13 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 />
                 <GullyChip
                   label="Batter"
-                  active={editRole === "pure_batter"}
-                  onPress={() => setEditRole("pure_batter")}
+                  active={editRole === "batsman"}
+                  onPress={() => setEditRole("batsman")}
                 />
                 <GullyChip
                   label="Bowler"
-                  active={editRole === "strike_bowler"}
-                  onPress={() => setEditRole("strike_bowler")}
+                  active={editRole === "bowler"}
+                  onPress={() => setEditRole("bowler")}
                 />
                 <GullyChip
                   label="Keeper"
@@ -823,9 +849,14 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   onPress={() => setEditBowlStyle("rm")}
                 />
                 <GullyChip
-                  label="Right Spin"
-                  active={editBowlStyle === "rs"}
-                  onPress={() => setEditBowlStyle("rs")}
+                  label="Off Spin"
+                  active={editBowlStyle === "spin_off"}
+                  onPress={() => setEditBowlStyle("spin_off")}
+                />
+                <GullyChip
+                  label="Leg Spin"
+                  active={editBowlStyle === "spin_leg"}
+                  onPress={() => setEditBowlStyle("spin_leg")}
                 />
                 <GullyChip
                   label="Left Fast"
@@ -838,9 +869,14 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   onPress={() => setEditBowlStyle("lm")}
                 />
                 <GullyChip
-                  label="Left Spin"
-                  active={editBowlStyle === "ls"}
-                  onPress={() => setEditBowlStyle("ls")}
+                  label="Slow Left-arm"
+                  active={editBowlStyle === "sla"}
+                  onPress={() => setEditBowlStyle("sla")}
+                />
+                <GullyChip
+                  label="Other"
+                  active={editBowlStyle === "other"}
+                  onPress={() => setEditBowlStyle("other")}
                 />
               </View>
             </View>
@@ -885,6 +921,19 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 ))}
               </View>
             </View>
+
+            {editError ? (
+              <Text
+                style={{
+                  fontSize: 12,
+                  color: colors.warning,
+                  fontFamily: FONTS.sans,
+                  lineHeight: 17,
+                }}
+              >
+                {editError}
+              </Text>
+            ) : null}
 
             <View
               style={{
@@ -2259,8 +2308,16 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 fullWidth
                 onPress={() => {
                   if (!canEdit) return; // audience (1.4.7)
+                  // Archived → RESTORE (unarchivePlayer). The old code called
+                  // deleteOrArchivePlayer here too — re-archiving (a no-op) or
+                  // PERMANENTLY DELETING an archived player whose matches were
+                  // gone. That was the on-device "Restore did nothing" report.
                   try {
-                    db.deleteOrArchivePlayer(player.id);
+                    if (player.isArchived) {
+                      db.unarchivePlayer(player.id);
+                    } else {
+                      db.deleteOrArchivePlayer(player.id);
+                    }
                   } catch {
                     /* gate keeps audience out; belt & braces */
                   }

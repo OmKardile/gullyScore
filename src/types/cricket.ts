@@ -82,7 +82,7 @@ export type WicketType =
   | "retired_out"
   | "retired_hurt"; // Not a wicket; player can return
 
-export type ShotDirection = 
+export type ShotDirection =
   | "fine_leg"
   | "square_leg"
   | "mid_wicket"
@@ -91,7 +91,10 @@ export type ShotDirection =
   | "long_off"
   | "cover"
   | "point"
-  | "third_man";
+  | "third_man"
+  | "pitch"; // "Defended" in the picker — a real answer, but no scoring
+  // direction: the wagon wheel skips these shots (1.4.7-test-3 fix — the
+  // picker used to cast this value into the union without declaring it).
 
 export interface DismissalInfo {
   type: WicketType;

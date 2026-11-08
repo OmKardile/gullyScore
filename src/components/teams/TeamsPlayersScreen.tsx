@@ -89,6 +89,11 @@ export const TeamsPlayersScreen: React.FC = () => {
   const [newPlayerBatHand, setNewPlayerBatHand] = useState<BattingHand>("right");
   const [newPlayerBowlStyle, setNewPlayerBowlStyle] = useState<BowlingStyle>("rm");
   const [newPlayerTeamId, setNewPlayerTeamId] = useState<string>("");
+  // Create-form failures (expired umpire session, storage error) shown
+  // inline in the sheet — never swallowed, never crashing the app.
+  const [formError, setFormError] = useState<string | null>(null);
+  // Restore/archive failures shown inline in the teams list (same reason).
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   const refreshData = () => {
     setTeams(db.getTeams());
@@ -124,7 +129,15 @@ export const TeamsPlayersScreen: React.FC = () => {
       playerIds: [],
       createdAt: Date.now(),
     };
-    db.saveTeam(team);
+    // Guarded: an expired umpire session throws inside this onPress —
+    // uncaught, that crashed the app instead of showing a message.
+    try {
+      db.saveTeam(team);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setFormError(null);
     refreshData();
     setShowAddTeamModal(false);
     setNewTeamName("");
@@ -144,14 +157,19 @@ export const TeamsPlayersScreen: React.FC = () => {
       isArchived: false,
       createdAt: Date.now(),
     };
-    db.savePlayer(player);
-    if (newPlayerTeamId) {
-      const t = db.getTeam(newPlayerTeamId);
-      if (t) {
-        t.playerIds.push(player.id);
-        db.saveTeam(t);
+    try {
+      db.savePlayer(player);
+      if (newPlayerTeamId) {
+        const t = db.getTeam(newPlayerTeamId);
+        if (t) {
+          db.saveTeam({ ...t, playerIds: [...t.playerIds, player.id] });
+        }
       }
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+      return;
     }
+    setFormError(null);
     refreshData();
     setShowAddPlayerModal(false);
     setNewPlayerName("");
@@ -310,6 +328,130 @@ export const TeamsPlayersScreen: React.FC = () => {
                     </Text>
                   </Pressable>
                 ))}
+
+              {/* Archived teams: restore entry point (1.4.7-test-3 fix —
+                  archiving a team used to be irreversible from the UI;
+                  db.unarchiveTeam existed but had no caller). */}
+              {teams.some((t) => t.isArchived) && (
+                <View style={{ flexDirection: "column", gap: 8, marginTop: 8 }}>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                      color: colors.ink2,
+                      fontWeight: "600",
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Archived Teams
+                  </Text>
+                  {teams
+                    .filter((t) => t.isArchived)
+                    .map((team) => (
+                      <View
+                        key={team.id}
+                        style={{
+                          padding: 12,
+                          backgroundColor: colors.surface,
+                          borderWidth: 1,
+                          borderColor: colors.hairline,
+                          borderRadius: 10,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          opacity: 0.85,
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                          <View
+                            style={{
+                              width: 32,
+                              height: 32,
+                              borderRadius: 8,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: team.color,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                fontFamily: FONTS.serif,
+                                fontWeight: "700",
+                                color: "#FFFFFF",
+                                fontSize: 12,
+                              }}
+                            >
+                              {team.monogram}
+                            </Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={{
+                                fontSize: 14,
+                                fontFamily: FONTS.serif,
+                                fontWeight: "600",
+                                color: colors.ink,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {team.name}
+                            </Text>
+                            <Text style={{ fontSize: 11, color: colors.ink2, fontFamily: FONTS.sans }}>
+                              {team.playerIds.length} players · archived
+                            </Text>
+                          </View>
+                        </View>
+                        <GullyButton
+                          size="sm"
+                          variant="quiet"
+                          disabled={!canEdit}
+                          onPress={() => {
+                            try {
+                              db.unarchiveTeam(team.id);
+                              setRestoreError(null);
+                            } catch (err) {
+                              setRestoreError(
+                                err instanceof Error ? err.message : String(err)
+                              );
+                            }
+                            refreshData();
+                          }}
+                        >
+                          Restore
+                        </GullyButton>
+                      </View>
+                    ))}
+                  {restoreError ? (
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: colors.warning,
+                        fontFamily: FONTS.sans,
+                        lineHeight: 17,
+                      }}
+                    >
+                      {restoreError}
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+              {/* Archive/restore failures must be visible even when NO
+                  archived team exists (review round 2: the message used to
+                  render only inside the archived section, so a failed
+                  archive vanished with the section it was gating on). */}
+              {restoreError && !teams.some((t) => t.isArchived) ? (
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.warning,
+                    fontFamily: FONTS.sans,
+                    lineHeight: 17,
+                  }}
+                >
+                  {restoreError}
+                </Text>
+              ) : null}
             </View>
           )}
 
@@ -448,7 +590,10 @@ export const TeamsPlayersScreen: React.FC = () => {
       {/* --- ADD TEAM SHEET --- */}
       <GullySheet
         isOpen={showAddTeamModal}
-        onClose={() => setShowAddTeamModal(false)}
+        onClose={() => {
+          setShowAddTeamModal(false);
+          setFormError(null);
+        }}
         title="Create Team"
       >
         <View style={{ flexDirection: "column", gap: 16 }}>
@@ -497,13 +642,21 @@ export const TeamsPlayersScreen: React.FC = () => {
           >
             Save Team
           </GullyButton>
+          {formError ? (
+            <Text style={{ fontSize: 12, color: colors.warning, fontFamily: FONTS.sans, lineHeight: 17 }}>
+              {formError}
+            </Text>
+          ) : null}
         </View>
       </GullySheet>
 
       {/* --- ADD PLAYER SHEET --- */}
       <GullySheet
         isOpen={showAddPlayerModal}
-        onClose={() => setShowAddPlayerModal(false)}
+        onClose={() => {
+          setShowAddPlayerModal(false);
+          setFormError(null);
+        }}
         title="Add Player"
       >
         <View style={{ flexDirection: "column", gap: 16 }}>
@@ -594,6 +747,11 @@ export const TeamsPlayersScreen: React.FC = () => {
           >
             Save Player
           </GullyButton>
+          {formError ? (
+            <Text style={{ fontSize: 12, color: colors.warning, fontFamily: FONTS.sans, lineHeight: 17 }}>
+              {formError}
+            </Text>
+          ) : null}
         </View>
       </GullySheet>
 
@@ -745,11 +903,17 @@ export const TeamsPlayersScreen: React.FC = () => {
             <GullyButton
               variant="quiet"
               fullWidth
+              disabled={!canEdit}
               onPress={() => {
                 try {
                   db.deleteOrArchiveTeam(selectedTeam.id);
+                  setRestoreError(null);
                 } catch (err) {
-                  console.warn("deleteOrArchiveTeam blocked:", err instanceof Error ? err.message : err);
+                  setRestoreError(
+                    `Couldn't archive ${selectedTeam.name} — ${
+                      err instanceof Error ? err.message : String(err)
+                    }`
+                  );
                 }
                 refreshData();
                 setSelectedTeam(null);
