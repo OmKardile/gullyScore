@@ -16,6 +16,7 @@ import {
   SafeAreaView,
 } from "react-native-safe-area-context";
 import {
+  Platform,
   View,
   Text,
   Pressable,
@@ -494,10 +495,42 @@ function Root() {
   );
 }
 
+/** Web-only responsive shell: caps the app to a centered phone-width column
+ *  (maxWidth 620) on tablets / desktop web, so wide viewports read as a
+ *  deliberate app column instead of stretched full-bleed rows; keeps the
+ *  letterbox area in the theme's background color. No-op on iOS/Android —
+ *  #root already equals the screen there, and the cap never bites under
+ *  620dp. (Responsive round 1.4.7-test-5.) */
+const WebResponsiveShell: React.FC<{ bg: string }> = ({ bg }) => {
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    let style = document.getElementById("gs-responsive-shell") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "gs-responsive-shell";
+      style.textContent =
+        "#root{max-width:620px;margin-left:auto;margin-right:auto;}";
+      document.head.appendChild(style);
+    }
+    document.body.style.backgroundColor = bg;
+    return () => {
+      /* keep the style across theme changes; only the bg color varies */
+    };
+  }, [bg]);
+  return null;
+};
+
+/** Syncs the html letterbox to the current theme background (web only). */
+const ThemeBgSync: React.FC = () => {
+  const { colors } = useTheme();
+  return <WebResponsiveShell bg={colors.bg} />;
+};
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
+        <ThemeBgSync />
         <ErrorBoundary>
           <NavigationContainer>
             <Root />

@@ -271,7 +271,10 @@ export const TeamsPlayersScreen: React.FC = () => {
                       opacity: pressed ? 0.9 : 1,
                     })}
                   >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    {/* Responsive: the name block flexes and truncates so a
+                        long team name + captain line can never push the View
+                        label off the row (320dp phones). */}
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
                       <View
                         style={{
                           width: 40,
@@ -293,8 +296,9 @@ export const TeamsPlayersScreen: React.FC = () => {
                           {team.monogram}
                         </Text>
                       </View>
-                      <View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
                         <Text
+                          numberOfLines={1}
                           style={{
                             fontSize: 16,
                             fontFamily: FONTS.serif,
@@ -305,6 +309,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                           {team.name}
                         </Text>
                         <Text
+                          numberOfLines={1}
                           style={{
                             fontSize: 12,
                             color: colors.ink2,
@@ -322,6 +327,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                         fontSize: 12,
                         color: colors.ink2,
                         fontFamily: FONTS.serif,
+                        flexShrink: 0,
                       }}
                     >
                       View
@@ -508,7 +514,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                       borderTopColor: colors.hairline,
                     })}
                   >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
                       <View
                         style={{
                           width: 32,
@@ -532,26 +538,30 @@ export const TeamsPlayersScreen: React.FC = () => {
                           {player.name.slice(0, 2).toUpperCase()}
                         </Text>
                       </View>
-                      <View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
                         <View
                           style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
                         >
                           <Text
+                            numberOfLines={1}
                             style={{
                               fontSize: 14,
                               fontWeight: "500",
                               color: colors.ink,
                               fontFamily: FONTS.sans,
+                              flexShrink: 1,
                             }}
                           >
                             {player.name}
                           </Text>
                           {player.nickname && (
                             <Text
+                              numberOfLines={1}
                               style={{
                                 fontSize: 12,
                                 color: colors.ink2,
                                 fontFamily: FONTS.sans,
+                                flexShrink: 0,
                               }}
                             >
                               "{player.nickname}"
@@ -559,6 +569,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                           )}
                         </View>
                         <Text
+                          numberOfLines={1}
                           style={{
                             fontSize: 11,
                             color: colors.ink2,
@@ -575,6 +586,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                         fontSize: 12,
                         color: colors.ink2,
                         fontFamily: FONTS.sans,
+                        flexShrink: 0,
                       }}
                     >
                       Profile

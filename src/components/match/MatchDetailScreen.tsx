@@ -518,7 +518,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                   >
                     <Award size={20} strokeWidth={1.5} color={colors.accent} />
                   </View>
-                  <View style={{ flexShrink: 1 }}>
+                  <View style={{ flexShrink: 1, minWidth: 0 }}>
                     <Text
                       style={{
                         fontSize: 11,
@@ -532,6 +532,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                       Player of the Match (MVP)
                     </Text>
                     <Text
+                      numberOfLines={1}
                       style={{
                         fontSize: 16,
                         fontFamily: FONTS.serif,
@@ -544,7 +545,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                   </View>
                 </View>
 
-                <View style={{ alignItems: "flex-end" }}>
+                <View style={{ alignItems: "flex-end", flexShrink: 0 }}>
                   <Text
                     style={[
                       {
@@ -591,7 +592,11 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                       borderBottomColor: colors.hairline,
                     }}
                   >
-                    <Text style={{ fontSize: 14, fontFamily: FONTS.sans, color: colors.ink }}>
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={{ fontSize: 14, fontFamily: FONTS.sans, color: colors.ink, flex: 1, minWidth: 0, paddingRight: 8 }}
+                    >
                       {playersMap[b.playerId]?.name}
                     </Text>
                     <Text
@@ -796,8 +801,8 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                             borderBottomColor: colors.hairline,
                           }}
                         >
-                          <View style={{ flex: 1, paddingRight: 8 }}>
-                            <Text style={{ fontSize: 14, fontFamily: FONTS.sans, fontWeight: "600", color: colors.ink }}>
+                          <View style={{ flex: 1, paddingRight: 8, minWidth: 0 }}>
+                            <Text numberOfLines={1} style={{ fontSize: 14, fontFamily: FONTS.sans, fontWeight: "600", color: colors.ink }}>
                               {playersMap[b.playerId]?.name} {!b.isOut && "*"}
                             </Text>
                             <Text style={{ fontSize: 11, fontFamily: FONTS.sans, color: colors.ink2 }}>
@@ -910,7 +915,7 @@ export const MatchDetailScreen: React.FC<MatchDetailScreenProps> = ({
                             borderBottomColor: colors.hairline,
                           }}
                         >
-                          <Text style={{ flex: 1, fontSize: 14, fontFamily: FONTS.sans, fontWeight: "500", color: colors.ink, paddingRight: 8 }}>
+                          <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 14, fontFamily: FONTS.sans, fontWeight: "500", color: colors.ink, paddingRight: 8 }}>
                             {playersMap[bw.playerId]?.name}
                           </Text>
                           <Text style={[{ width: 34, textAlign: "right", fontSize: 12, fontFamily: FONTS.sans, color: colors.ink2 }, tnum]}>

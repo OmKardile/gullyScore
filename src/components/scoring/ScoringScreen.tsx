@@ -144,7 +144,8 @@ const CenteredModal: React.FC<{
         ]}
         onPress={() => onRequestClose?.()}
       />
-      {children}
+      {/* Responsive: dialog content stays a centered column on wide screens */}
+      <View style={{ width: "100%", maxWidth: 620 }}>{children}</View>
     </View>
   </Modal>
 );
@@ -178,6 +179,7 @@ const RunKey: React.FC<{
       }}
     >
       <Text
+        maxFontSizeMultiplier={1.4}
         style={{
           fontSize: 24,
           fontFamily: FONTS.serif,
@@ -1359,12 +1361,17 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           backgroundColor: colors.surface,
         }}
       >
+        {/* Responsive: flexShrink 0 keeps the back button whole while the
+            title truncates instead of pushing the icons off-screen (the
+            1.4.7-test-5 responsive round — long team names overflowed the
+            row to a fixed 390px on every phone under ~430dp). */}
         <Pressable
           onPress={() => setShowConfirmExit(true)}
           style={({ pressed }) => ({
             flexDirection: "row",
             alignItems: "center",
             gap: 4,
+            flexShrink: 0,
             opacity: pressed ? 0.85 : 1,
           })}
         >
@@ -1374,16 +1381,31 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
           </Text>
         </Pressable>
 
-        <View style={{ flexDirection: "column", alignItems: "center" }}>
-          <Text style={{ fontSize: 12, fontFamily: FONTS.serif, fontWeight: "600", color: colors.ink }}>
+        <View
+          style={{
+            flexDirection: "column",
+            alignItems: "center",
+            flex: 1,
+            minWidth: 0,
+            marginHorizontal: 8,
+          }}
+        >
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="middle"
+            style={{ fontSize: 12, fontFamily: FONTS.serif, fontWeight: "600", color: colors.ink }}
+          >
             {battingTeam?.name} vs {bowlingTeam?.name}
           </Text>
-          <Text style={{ fontSize: 10, color: colors.ink2, fontFamily: FONTS.sans }}>
+          <Text
+            numberOfLines={1}
+            style={{ fontSize: 10, color: colors.ink2, fontFamily: FONTS.sans }}
+          >
             Innings {currentInningsIndex + 1} of {match.innings.length} · {match.rules.overs} Overs
           </Text>
         </View>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }}>
           <Pressable
             onPress={() => setShowPredictionSheet(true)}
             accessibilityLabel="Live Win & Score Predictor"
@@ -1595,7 +1617,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                 paddingVertical: 4,
               }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
                 <View
                   style={{
                     width: 6,
@@ -1611,13 +1633,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                     fontFamily: FONTS.sans,
                     fontWeight: "600",
                     color: colors.ink,
-                    maxWidth: 130,
                   }}
                 >
                   {strikerPlayer?.name || "Striker"} *
                 </Text>
               </View>
-              <View style={{ flexDirection: "row", gap: 16, alignItems: "center" }}>
+              <View style={{ flexDirection: "row", gap: 16, alignItems: "center", flexShrink: 0 }}>
                 <Text
                   style={[
                     { width: 24, textAlign: "right", fontWeight: "700", fontSize: 14, color: colors.ink },
@@ -1670,15 +1691,15 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                 paddingVertical: 4,
               }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 14 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 14, flex: 1, minWidth: 0 }}>
                 <Text
                   numberOfLines={1}
-                  style={{ fontSize: 14, color: colors.ink2, maxWidth: 130, fontFamily: FONTS.sans }}
+                  style={{ fontSize: 14, color: colors.ink2, fontFamily: FONTS.sans }}
                 >
                   {nonStrikerPlayer?.name || "Non-Striker"}
                 </Text>
               </View>
-              <View style={{ flexDirection: "row", gap: 16, alignItems: "center" }}>
+              <View style={{ flexDirection: "row", gap: 16, alignItems: "center", flexShrink: 0 }}>
                 <Text
                   style={[
                     { width: 24, textAlign: "right", fontWeight: "700", fontSize: 14, color: colors.ink },
@@ -1738,7 +1759,7 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
               justifyContent: "space-between",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
               <Text style={zoneLabel}>Bowl</Text>
               <Text
                 numberOfLines={1}
@@ -1747,13 +1768,12 @@ export const ScoringScreen: React.FC<ScoringScreenProps> = ({
                   fontWeight: "600",
                   color: colors.ink,
                   fontFamily: FONTS.sans,
-                  maxWidth: 140,
                 }}
               >
                 {bowlerPlayer?.name || "Bowler"}
               </Text>
             </View>
-            <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
+            <View style={{ flexDirection: "row", gap: 12, alignItems: "center", flexShrink: 0 }}>
               <Text style={[{ fontSize: 12, color: colors.ink2, fontFamily: FONTS.sans }, TNUM]}>
                 {formatOvers(bowlerStat?.legalBalls ?? 0)} ov
               </Text>

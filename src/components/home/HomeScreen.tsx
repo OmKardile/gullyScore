@@ -374,8 +374,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   marginVertical: 4,
                 }}
               >
-                <View>
+                {/* Responsive: the name block flexes and truncates (long
+                    team names at 320-360dp pushed the score off-screen);
+                    the score block never shrinks. */}
+                <View style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
                   <Text
+                    numberOfLines={1}
+                    ellipsizeMode="middle"
                     style={{
                       fontSize: 16,
                       fontFamily: FONTS.serif,
@@ -387,6 +392,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     {db.getTeam(activeMatch.teamBId)?.name}
                   </Text>
                   <Text
+                    numberOfLines={1}
                     style={{
                       fontSize: 12,
                       color: colors.ink2,
@@ -404,7 +410,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     ? replayInnings(curInn.ballEvents, activeMatch.rules, [], [], db.getPlayersMap())
                     : null;
                   return (
-                    <View style={{ alignItems: "flex-end" }}>
+                    <View style={{ alignItems: "flex-end", flexShrink: 0 }}>
                       <Text
                         style={{
                           fontSize: 24,
@@ -806,8 +812,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         justifyContent: "space-between",
                       }}
                     >
-                      <View>
+                      <View style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
                         <Text
+                          numberOfLines={1}
                           style={{
                             fontSize: 12,
                             fontWeight: "500",
@@ -818,6 +825,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           {tA?.name || "Team removed"} vs {tB?.name || "Team removed"}
                         </Text>
                         <Text
+                          numberOfLines={1}
                           style={{
                             fontSize: 11,
                             color: colors.ink2,
@@ -833,6 +841,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           fontSize: 12,
                           color: colors.ink2,
                           fontFamily: "monospace",
+                          flexShrink: 0,
                         }}
                       >
                         Pending

@@ -228,6 +228,12 @@ export function GullySegmented<T extends string>({
     <View
       style={{
         flexDirection: "row",
+        // Responsive (test-5): wrap instead of overflowing. A fixed row
+        // clipped the 4th option ("Leaderboard") to ~3px on 320dp phones,
+        // making that sub-tab unreachable. flexWrap only kicks in when the
+        // options don't fit — wide screens keep the single-row look.
+        flexWrap: "wrap",
+        rowGap: 2,
         alignSelf: "flex-start",
         padding: 4,
         backgroundColor: colors.surface,
@@ -369,6 +375,12 @@ export const GullySheet: React.FC<BottomSheetProps> = ({
             borderRightWidth: 1,
             borderColor: colors.hairlineStrong,
             maxHeight: "85%",
+            // Responsive shell: sheets read as a deliberate centered column on
+            // tablets / desktop web instead of stretching edge-to-edge; on
+            // phones (<620dp) this is a no-op.
+            width: "100%",
+            maxWidth: 620,
+            alignSelf: "center",
           }}
         >
           {/* Grab handle */}
@@ -637,6 +649,7 @@ export const ScoreOdometer: React.FC<{
     <View style={{ alignItems: "center", paddingVertical: 16 }}>
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
         <Text
+          maxFontSizeMultiplier={1.6}
           style={{
             fontSize: 56,
             fontFamily: FONTS.serif,
@@ -648,6 +661,7 @@ export const ScoreOdometer: React.FC<{
           {runs}
         </Text>
         <Text
+          maxFontSizeMultiplier={1.6}
           style={{
             fontSize: 36,
             fontFamily: FONTS.serif,
@@ -658,6 +672,7 @@ export const ScoreOdometer: React.FC<{
           /
         </Text>
         <Text
+          maxFontSizeMultiplier={1.6}
           style={{
             fontSize: 44,
             fontFamily: FONTS.serif,
