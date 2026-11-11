@@ -88,7 +88,23 @@ export const TeamsPlayersScreen: React.FC = () => {
   const [newPlayerRole, setNewPlayerRole] = useState<PlayerRole>("all_rounder");
   const [newPlayerBatHand, setNewPlayerBatHand] = useState<BattingHand>("right");
   const [newPlayerBowlStyle, setNewPlayerBowlStyle] = useState<BowlingStyle>("rm");
-  const [newPlayerTeamId, setNewPlayerTeamId] = useState<string>("");
+  // Multi-team assignment (test-6): a gully player often turns out for more
+  // than one team (Sunday club + office league). The old single-select
+  // newPlayerTeamId silently kept only the LAST team tapped — every earlier
+  // pick vanished, which read from the outside as "add to team doesn't work".
+  const [newPlayerTeamIds, setNewPlayerTeamIds] = useState<string[]>([]);
+
+  // Team management sheet (test-6): squad membership, captain and identity
+  // editing live in the team's own sheet — opened from every team card
+  // ("Manage") and automatically right after creating a team (wizard step 2).
+  const [isEditingTeam, setIsEditingTeam] = useState<boolean>(false);
+  const [editTeamName, setEditTeamName] = useState<string>("");
+  const [editTeamShort, setEditTeamShort] = useState<string>("");
+  const [editTeamColor, setEditTeamColor] = useState<string>("#0E1B2E");
+  const [teamSheetError, setTeamSheetError] = useState<string | null>(null);
+  const [justCreatedTeamId, setJustCreatedTeamId] = useState<string | null>(
+    null
+  );
   // Create-form failures (expired umpire session, storage error) shown
   // inline in the sheet — never swallowed, never crashing the app.
   const [formError, setFormError] = useState<string | null>(null);
@@ -142,6 +158,12 @@ export const TeamsPlayersScreen: React.FC = () => {
     setShowAddTeamModal(false);
     setNewTeamName("");
     setNewTeamShort("");
+    // Wizard step 2 (test-6): a bare team with no squad, no captain and no
+    // way to customize it just dead-ends after this sheet closes — the user
+    // is dumped back on the list with nothing to do next. Open the manage
+    // sheet for the fresh team immediately so squad-building is one tap away.
+    setJustCreatedTeamId(team.id);
+    setSelectedTeam(team);
   };
 
   const handleCreatePlayer = () => {
@@ -159,12 +181,15 @@ export const TeamsPlayersScreen: React.FC = () => {
     };
     try {
       db.savePlayer(player);
-      if (newPlayerTeamId) {
-        const t = db.getTeam(newPlayerTeamId);
-        if (t) {
+      // Multi-team: every tapped team gets the player (deduped; archived
+      // teams are skipped defensively — the chip row only offers active
+      // teams, but a cloud-sync pull could have archived one mid-form).
+      newPlayerTeamIds.forEach((tid) => {
+        const t = db.getTeam(tid);
+        if (t && !t.playerIds.includes(player.id)) {
           db.saveTeam({ ...t, playerIds: [...t.playerIds, player.id] });
         }
-      }
+      });
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
       return;
@@ -174,6 +199,93 @@ export const TeamsPlayersScreen: React.FC = () => {
     setShowAddPlayerModal(false);
     setNewPlayerName("");
     setNewPlayerNickname("");
+    setNewPlayerTeamIds([]);
+  };
+
+  // --- Team management handlers (test-6) -------------------------------
+  // Every mutation is guarded: an expired umpire session throws inside
+  // db.saveTeam, and an uncaught throw here would crash the app (same
+  // convention as handleCreateTeam above). Errors surface inline in the
+  // team sheet instead.
+  //
+  // All handlers take a teamId and re-read the LIVE record from db instead
+  // of trusting the `team` render snapshot: two quick taps on different
+  // chips used to run on the same pre-tap squad, and the second save
+  // silently clobbered the first member addition.
+  const syncSelectedTeam = (teamId: string) => {
+    setSelectedTeam(db.getTeam(teamId) ?? null);
+    refreshData();
+  };
+
+  const handleToggleSquadMember = (teamId: string, playerId: string) => {
+    if (!canEdit) return;
+    const fresh = db.getTeam(teamId);
+    if (!fresh) return;
+    try {
+      const inSquad = fresh.playerIds.includes(playerId);
+      const playerIds = inSquad
+        ? fresh.playerIds.filter((id) => id !== playerId)
+        : [...fresh.playerIds, playerId];
+      // Removing the captain from the squad would leave captainId pointing
+      // at a non-member — clear it so the card never shows a ghost captain.
+      const captainId =
+        inSquad && fresh.captainId === playerId ? undefined : fresh.captainId;
+      db.saveTeam({ ...fresh, playerIds, captainId });
+      setTeamSheetError(null);
+    } catch (e) {
+      setTeamSheetError(e instanceof Error ? e.message : String(e));
+    }
+    syncSelectedTeam(teamId);
+  };
+
+  const handleSetCaptain = (teamId: string, playerId: string) => {
+    if (!canEdit) return;
+    const fresh = db.getTeam(teamId);
+    if (!fresh) return;
+    try {
+      db.saveTeam({ ...fresh, captainId: playerId });
+      setTeamSheetError(null);
+    } catch (e) {
+      setTeamSheetError(e instanceof Error ? e.message : String(e));
+    }
+    syncSelectedTeam(teamId);
+  };
+
+  const startEditTeam = (team: Team) => {
+    setEditTeamName(team.name);
+    setEditTeamShort(team.shortName);
+    setEditTeamColor(team.color);
+    setTeamSheetError(null);
+    setIsEditingTeam(true);
+  };
+
+  const handleSaveTeamDetails = (teamId: string) => {
+    if (!canEdit) return;
+    if (!editTeamName.trim()) return;
+    const fresh = db.getTeam(teamId);
+    if (!fresh) return;
+    const short =
+      editTeamShort.trim() ||
+      editTeamName
+        .split(" ")
+        .map((w) => w[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 3);
+    try {
+      db.saveTeam({
+        ...fresh,
+        name: editTeamName.trim(),
+        shortName: short,
+        monogram: short,
+        color: editTeamColor,
+      });
+      setTeamSheetError(null);
+      setIsEditingTeam(false);
+    } catch (e) {
+      setTeamSheetError(e instanceof Error ? e.message : String(e));
+    }
+    syncSelectedTeam(teamId);
   };
 
   const filteredPlayers = useMemo(() => {
@@ -222,7 +334,8 @@ export const TeamsPlayersScreen: React.FC = () => {
           onChange={(v) => setActiveTab(v)}
         />
 
-        {/* RN: web Plus icon dropped (GullyButton children are text-only). */}
+        {/* Naming (test-6): "Team"/"Player" read as labels for the tab
+            itself, not as actions. The buttons now say what they do. */}
         <GullyButton
           size="sm"
           variant="primary"
@@ -231,7 +344,11 @@ export const TeamsPlayersScreen: React.FC = () => {
             activeTab === "teams" ? setShowAddTeamModal(true) : setShowAddPlayerModal(true)
           }
         >
-          {canEdit ? (activeTab === "teams" ? "Team" : "Player") : "Umpire key needed"}
+          {canEdit
+            ? activeTab === "teams"
+              ? "New Team"
+              : "New Player"
+            : "Umpire key needed"}
         </GullyButton>
       </View>
 
@@ -330,7 +447,7 @@ export const TeamsPlayersScreen: React.FC = () => {
                         flexShrink: 0,
                       }}
                     >
-                      View
+                      Manage
                     </Text>
                   </Pressable>
                 ))}
@@ -728,27 +845,46 @@ export const TeamsPlayersScreen: React.FC = () => {
           </View>
 
           <View>
-            <ControlLabel>Add to Team (Optional)</ControlLabel>
-            {/* RN: web <select> → GullyChip row ("" = free agent). */}
+            <ControlLabel>Add to Teams (Optional)</ControlLabel>
+            {/* Multi-select (test-6): each team toggles independently — a
+                player can join several teams at once. "Free agent" clears
+                the selection. Archived teams are never offered. */}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
               <GullyChip
                 label="No team yet (Free agent)"
-                active={newPlayerTeamId === ""}
-                onPress={() => setNewPlayerTeamId("")}
+                active={newPlayerTeamIds.length === 0}
+                onPress={() => setNewPlayerTeamIds([])}
               />
-              {/* Archived teams are roster-managed from the Teams list —
-                  don't offer them for new player assignments. */}
               {teams
                 .filter((t) => !t.isArchived)
                 .map((t) => (
-                <GullyChip
-                  key={t.id}
-                  label={t.name}
-                  active={newPlayerTeamId === t.id}
-                  onPress={() => setNewPlayerTeamId(t.id)}
-                />
-              ))}
+                  <GullyChip
+                    key={t.id}
+                    label={t.name}
+                    colorDot={t.color}
+                    active={newPlayerTeamIds.includes(t.id)}
+                    onPress={() =>
+                      setNewPlayerTeamIds((prev) =>
+                        prev.includes(t.id)
+                          ? prev.filter((id) => id !== t.id)
+                          : [...prev, t.id]
+                      )
+                    }
+                  />
+                ))}
             </View>
+            {newPlayerTeamIds.length > 1 ? (
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: colors.ink2,
+                  fontFamily: FONTS.sans,
+                  marginTop: 6,
+                }}
+              >
+                Joining {newPlayerTeamIds.length} teams at once.
+              </Text>
+            ) : null}
           </View>
 
           <GullyButton
@@ -774,167 +910,422 @@ export const TeamsPlayersScreen: React.FC = () => {
         onPlayerUpdated={refreshData}
       />
 
-      {/* --- TEAM PROFILE DRAWER --- */}
+      {/* --- TEAM MANAGE SHEET (test-6) ------------------------------------
+          Squad membership, captain and team identity are edited here —
+          reachable from every team card's "Manage" action and opened
+          automatically right after creation (wizard step 2). Previously the
+          drawer was read-only: no way to add/remove members, pick a captain
+          or customize the team after it was created. */}
       <GullySheet
         isOpen={!!selectedTeam}
-        onClose={() => setSelectedTeam(null)}
+        onClose={() => {
+          setSelectedTeam(null);
+          setJustCreatedTeamId(null);
+          setIsEditingTeam(false);
+          setTeamSheetError(null);
+        }}
         title={selectedTeam?.name || "Team Squad"}
       >
-        {selectedTeam && (
-          <View style={{ flexDirection: "column", gap: 16 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View
-                style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 8,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: selectedTeam.color,
-                }}
-              >
-                <Text
+        {selectedTeam && (() => {
+          const team = selectedTeam;
+          const justCreated = justCreatedTeamId === team.id;
+          const squad = team.playerIds
+            .map((id) => db.getPlayer(id))
+            .filter((p): p is Player => !!p && !p.isArchived);
+          const availablePlayers = players.filter(
+            (p) => !p.isArchived && !team.playerIds.includes(p.id)
+          );
+          const captainName =
+            db.getPlayer(team.captainId || "")?.name || "None";
+          return (
+            <View style={{ flexDirection: "column", gap: 16 }}>
+              {justCreated && (
+                <View
                   style={{
-                    fontFamily: FONTS.serif,
-                    fontWeight: "700",
-                    color: "#FFFFFF",
-                    fontSize: 18,
+                    padding: 12,
+                    borderWidth: 1,
+                    borderColor: colors.hairlineStrong,
+                    borderRadius: 10,
+                    backgroundColor: colors.surfaceCard,
                   }}
                 >
-                  {selectedTeam.monogram}
-                </Text>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontFamily: FONTS.sans,
+                      color: colors.ink,
+                      lineHeight: 18,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontFamily: FONTS.sans,
+                        fontWeight: "700",
+                        color: colors.ink,
+                      }}
+                    >
+                      Team created!{" "}
+                    </Text>
+                    Add players to the squad and pick a captain below.
+                  </Text>
+                </View>
+              )}
+
+              {/* Identity header */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <View
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 8,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: team.color,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontFamily: FONTS.serif,
+                      fontWeight: "700",
+                      color: "#FFFFFF",
+                      fontSize: 18,
+                    }}
+                  >
+                    {team.monogram}
+                  </Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      fontSize: 18,
+                      fontFamily: FONTS.serif,
+                      fontWeight: "700",
+                      color: colors.ink,
+                    }}
+                  >
+                    {team.name}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: colors.ink2,
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    {team.playerIds.length} player
+                    {team.playerIds.length === 1 ? "" : "s"} registered ·
+                    Captain: {captainName}
+                  </Text>
+                </View>
               </View>
+
               <View>
                 <Text
                   style={{
-                    fontSize: 18,
-                    fontFamily: FONTS.serif,
-                    fontWeight: "700",
-                    color: colors.ink,
-                  }}
-                >
-                  {selectedTeam.name}
-                </Text>
-                <Text
-                  style={{
                     fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
                     color: colors.ink2,
+                    fontWeight: "600",
+                    marginBottom: 8,
                     fontFamily: FONTS.sans,
                   }}
                 >
-                  {selectedTeam.playerIds.length} players registered
+                  Squad Members
                 </Text>
-              </View>
-            </View>
-
-            <View>
-              <Text
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  letterSpacing: 1,
-                  color: colors.ink2,
-                  fontWeight: "600",
-                  marginBottom: 8,
-                  fontFamily: FONTS.sans,
-                }}
-              >
-                Squad Members
-              </Text>
-              {/* RN: web max-h-60 overflow-y-auto → fixed-height nested ScrollView. */}
-              <ScrollView
-                style={{
-                  borderWidth: 1,
-                  borderColor: colors.hairline,
-                  borderRadius: 8,
-                  maxHeight: 240,
-                }}
-                nestedScrollEnabled
-              >
-                {selectedTeam.playerIds.map((pId, idx) => {
-                  const p = db.getPlayer(pId);
-                  const isCaptain = selectedTeam.captainId === pId;
-                  return (
-                    <Pressable
-                      key={pId}
-                      onPress={() => {
-                        if (p) setSelectedPlayer(p);
+                {/* RN: web max-h-60 overflow-y-auto → fixed-height nested ScrollView. */}
+                <ScrollView
+                  style={{
+                    borderWidth: 1,
+                    borderColor: colors.hairline,
+                    borderRadius: 8,
+                    maxHeight: 240,
+                  }}
+                  nestedScrollEnabled
+                >
+                  {squad.length === 0 && (
+                    <Text
+                      style={{
+                        padding: 12,
+                        fontSize: 12,
+                        color: colors.ink2,
+                        fontFamily: FONTS.sans,
+                        lineHeight: 17,
                       }}
-                      style={({ pressed }) => ({
-                        padding: 10,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        backgroundColor: pressed
-                          ? colors.surfaceCard
-                          : "transparent",
-                        borderTopWidth: idx > 0 ? 1 : 0,
-                        borderTopColor: colors.hairline,
-                      })}
                     >
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                        <Text
+                      No players yet — add your first players below.
+                    </Text>
+                  )}
+                  {squad.map((p, idx) => {
+                    const isCaptain = team.captainId === p.id;
+                    return (
+                      <Pressable
+                        key={p.id}
+                        onPress={() => setSelectedPlayer(p)}
+                        style={({ pressed }) => ({
+                          paddingHorizontal: 10,
+                          paddingVertical: 8,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          backgroundColor: pressed
+                            ? colors.surfaceCard
+                            : "transparent",
+                          borderTopWidth: idx > 0 ? 1 : 0,
+                          borderTopColor: colors.hairline,
+                        })}
+                      >
+                        <View
                           style={{
-                            fontSize: 12,
-                            fontWeight: "500",
-                            color: colors.ink,
-                            fontFamily: FONTS.sans,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 8,
+                            flex: 1,
+                            minWidth: 0,
                           }}
                         >
-                          {p?.name || "Player"}
-                        </Text>
-                        {isCaptain && (
                           <Text
+                            numberOfLines={1}
                             style={{
-                              fontSize: 10,
-                              color: colors.accent,
-                              fontWeight: "700",
+                              fontSize: 12,
+                              fontWeight: "500",
+                              color: colors.ink,
                               fontFamily: FONTS.sans,
+                              flexShrink: 1,
                             }}
                           >
-                            (C)
+                            {p.name}
                           </Text>
+                          {isCaptain && (
+                            <Text
+                              style={{
+                                fontSize: 10,
+                                color: colors.accent,
+                                fontWeight: "700",
+                                fontFamily: FONTS.sans,
+                                flexShrink: 0,
+                              }}
+                            >
+                              (C)
+                            </Text>
+                          )}
+                          <Text
+                            numberOfLines={1}
+                            style={{
+                              color: colors.ink2,
+                              fontSize: 11,
+                              fontFamily: FONTS.sans,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {p.role.replace("_", " ")}
+                          </Text>
+                        </View>
+                        {canEdit && (
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 6,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {!isCaptain && (
+                              <GullyButton
+                                size="sm"
+                                variant="quiet"
+                                onPress={() => handleSetCaptain(team.id, p.id)}
+                              >
+                                Make Captain
+                              </GullyButton>
+                            )}
+                            <GullyButton
+                              size="sm"
+                              variant="quiet"
+                              onPress={() =>
+                                handleToggleSquadMember(team.id, p.id)
+                              }
+                            >
+                              Remove
+                            </GullyButton>
+                          </View>
                         )}
-                      </View>
-                      <Text
-                        style={{
-                          color: colors.ink2,
-                          fontSize: 11,
-                          fontFamily: FONTS.sans,
-                        }}
-                      >
-                        {p?.role.replace("_", " ")}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </View>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
 
-            {/* RN: web Archive icon dropped (GullyButton children are text-only). */}
-            <GullyButton
-              variant="quiet"
-              fullWidth
-              disabled={!canEdit}
-              onPress={() => {
-                try {
-                  db.deleteOrArchiveTeam(selectedTeam.id);
-                  setRestoreError(null);
-                } catch (err) {
-                  setRestoreError(
-                    `Couldn't archive ${selectedTeam.name} — ${
-                      err instanceof Error ? err.message : String(err)
-                    }`
-                  );
-                }
-                refreshData();
-                setSelectedTeam(null);
-              }}
-            >
-              Archive Team
-            </GullyButton>
-          </View>
-        )}
+              {/* Add players to the squad: chips toggle membership directly.
+                  Players already on OTHER teams stay available — a gully
+                  player can turn out for several teams at once. */}
+              {canEdit && (
+                <View>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                      color: colors.ink2,
+                      fontWeight: "600",
+                      marginBottom: 8,
+                      fontFamily: FONTS.sans,
+                    }}
+                  >
+                    Add Players to Squad
+                  </Text>
+                  {availablePlayers.length === 0 ? (
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: colors.ink2,
+                        fontFamily: FONTS.sans,
+                        lineHeight: 17,
+                      }}
+                    >
+                      Every active player is already on this squad — create
+                      more from the Players tab.
+                    </Text>
+                  ) : (
+                    <View
+                      style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}
+                    >
+                      {availablePlayers.map((p) => (
+                        <GullyChip
+                          key={p.id}
+                          label={p.name}
+                          onPress={() =>
+                            handleToggleSquadMember(team.id, p.id)
+                          }
+                        />
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Team identity editing */}
+              {canEdit &&
+                (isEditingTeam ? (
+                  <View style={{ flexDirection: "column", gap: 16 }}>
+                    <GullyTextField
+                      label="Team Name"
+                      placeholder="e.g. Shivaji Park Warriors"
+                      value={editTeamName}
+                      onChangeText={setEditTeamName}
+                    />
+                    <GullyTextField
+                      label="Short Name / Monogram"
+                      placeholder="e.g. SPW"
+                      value={editTeamShort}
+                      onChangeText={setEditTeamShort}
+                    />
+                    <View>
+                      <ControlLabel>Team Color Accent</ControlLabel>
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        {[
+                          "#0E1B2E",
+                          "#B4232A",
+                          "#1F7A43",
+                          "#D97706",
+                          "#4F46E5",
+                          "#0891B2",
+                        ].map((col) => (
+                          <Pressable
+                            key={col}
+                            onPress={() => setEditTeamColor(col)}
+                            style={({ pressed }) => ({
+                              width: 32,
+                              height: 32,
+                              borderRadius: 4,
+                              borderWidth: 2,
+                              backgroundColor: col,
+                              borderColor:
+                                editTeamColor === col
+                                  ? colors.ink
+                                  : "transparent",
+                              transform: [
+                                { scale: editTeamColor === col ? 1.1 : 1 },
+                              ],
+                              opacity: pressed ? 0.85 : 1,
+                            })}
+                          />
+                        ))}
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 12 }}>
+                      <GullyButton
+                        variant="primary"
+                        fullWidth
+                        onPress={() => handleSaveTeamDetails(team.id)}
+                      >
+                        Save Team Changes
+                      </GullyButton>
+                      <GullyButton
+                        variant="quiet"
+                        onPress={() => setIsEditingTeam(false)}
+                      >
+                        Cancel
+                      </GullyButton>
+                    </View>
+                  </View>
+                ) : (
+                  <GullyButton
+                    variant="quiet"
+                    fullWidth
+                    onPress={() => startEditTeam(team)}
+                  >
+                    Edit Team Details
+                  </GullyButton>
+                ))}
+
+              {teamSheetError ? (
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.warning,
+                    fontFamily: FONTS.sans,
+                    lineHeight: 17,
+                  }}
+                >
+                  {teamSheetError}
+                </Text>
+              ) : null}
+
+              {/* RN: web Archive icon dropped (GullyButton children are text-only). */}
+              <GullyButton
+                variant="quiet"
+                fullWidth
+                disabled={!canEdit}
+                onPress={() => {
+                  try {
+                    db.deleteOrArchiveTeam(selectedTeam.id);
+                    setRestoreError(null);
+                  } catch (err) {
+                    setRestoreError(
+                      `Couldn't archive ${selectedTeam.name} — ${
+                        err instanceof Error ? err.message : String(err)
+                      }`
+                    );
+                  }
+                  refreshData();
+                  setSelectedTeam(null);
+                }}
+              >
+                Archive Team
+              </GullyButton>
+            </View>
+          );
+        })()}
       </GullySheet>
     </SafeAreaView>
   );

@@ -369,6 +369,9 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 alignItems: "center",
                 gap: 12,
                 flex: 1,
+                // Responsive: minWidth 0 lets the name block wrap internally
+                // instead of pushing the edit button off the card (320dp).
+                minWidth: 0,
                 paddingRight: 8,
               }}
             >
@@ -407,7 +410,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                 </Text>
               </View>
 
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <View
                   style={{
                     flexDirection: "row",
@@ -457,6 +460,11 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   )}
                 </View>
 
+                {/* Responsive: separators used to be their own Text nodes,
+                    so a wrap left an orphaned "•" hanging at the end of a
+                    line. Each item now carries its own leading separator —
+                    a wrapped line always starts with "•", reading as a
+                    clean list instead of broken prose. */}
                 <View
                   style={{
                     flexDirection: "row",
@@ -481,38 +489,25 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                       fontSize: 12,
                       fontFamily: FONTS.sans,
                       color: colors.ink2,
+                      flexShrink: 0,
                     }}
                   >
-                    •
+                    {`• ${
+                      player.battingHand === "left" ? "Left-hand" : "Right-hand"
+                    } bat`}
                   </Text>
                   <Text
                     style={{
                       fontSize: 12,
                       fontFamily: FONTS.sans,
                       color: colors.ink2,
+                      flexShrink: 0,
                     }}
                   >
-                    {player.battingHand === "left" ? "Left-hand" : "Right-hand"}{" "}
-                    bat
-                  </Text>
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      fontFamily: FONTS.sans,
-                      color: colors.ink2,
-                    }}
-                  >
-                    •
-                  </Text>
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      fontFamily: FONTS.sans,
-                      color: colors.ink2,
-                    }}
-                  >
-                    {bowlStyleLabelMap[player.bowlingStyle] ||
-                      player.bowlingStyle}
+                    {`• ${
+                      bowlStyleLabelMap[player.bowlingStyle] ||
+                      player.bowlingStyle
+                    }`}
                   </Text>
                 </View>
 
@@ -585,6 +580,10 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                   borderWidth: 1,
                   borderColor: pressed ? colors.ink : colors.hairline,
                   opacity: pressed ? 0.85 : 1,
+                  // Responsive: keep the edit affordance pinned to the top
+                  // corner and un-squeezable when the name wraps (320dp).
+                  alignSelf: "flex-start",
+                  flexShrink: 0,
                 },
               ]}
             >
@@ -971,19 +970,23 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
             paddingBottom: 8,
           }}
         >
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <GullySegmented
-              options={[
-                { label: "Overview", value: "overview" },
-                { label: "Batting", value: "batting" },
-                { label: "Bowling", value: "bowling" },
-                { label: "Matches", value: "matches" },
-                { label: "Milestones", value: "milestones" },
-              ]}
-              value={activeTab}
-              onChange={(v) => setActiveTab(v as any)}
-            />
-          </ScrollView>
+          {/* Responsive (test-6): the 5 sub-tabs used to sit inside a
+              horizontal ScrollView that clipped them mid-word ("Mil…" at
+              390dp, "Mat…" at 320dp) with no scroll affordance — it read as
+              a broken layout. GullySegmented already wraps (test-5), so the
+              tabs now wrap to a second row instead: every tab stays fully
+              visible and tappable on every width. */}
+          <GullySegmented
+            options={[
+              { label: "Overview", value: "overview" },
+              { label: "Batting", value: "batting" },
+              { label: "Bowling", value: "bowling" },
+              { label: "Matches", value: "matches" },
+              { label: "Milestones", value: "milestones" },
+            ]}
+            value={activeTab}
+            onChange={(v) => setActiveTab(v as any)}
+          />
         </View>
 
         {/* --- TAB 1: OVERVIEW --- */}
@@ -1042,9 +1045,14 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                     pts
                   </Text>
                 </View>
+                {/* Responsive: the three split stats wrap as whole items
+                    (flexShrink 0 + row wrap) instead of tearing "Bat:" and
+                    its number onto separate lines on 320dp phones. */}
                 <View
                   style={{
                     flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 4,
                     justifyContent: "space-between",
                     marginTop: 4,
                     borderTopWidth: 1,
@@ -1058,6 +1066,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                       color: colors.ink2,
                       fontVariant: ["tabular-nums"],
                       fontFamily: FONTS.sans,
+                      flexShrink: 0,
                     }}
                   >
                     Bat: {stats.battingMvpPoints}
@@ -1068,6 +1077,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                       color: colors.ink2,
                       fontVariant: ["tabular-nums"],
                       fontFamily: FONTS.sans,
+                      flexShrink: 0,
                     }}
                   >
                     Bowl: {stats.bowlingMvpPoints}
@@ -1078,6 +1088,7 @@ export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({
                       color: colors.ink2,
                       fontVariant: ["tabular-nums"],
                       fontFamily: FONTS.sans,
+                      flexShrink: 0,
                     }}
                   >
                     Field: {stats.fieldingMvpPoints}
