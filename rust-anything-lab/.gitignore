@@ -1,0 +1,12 @@
+# Reference copy of the upstream project (untrusted data, studied read-only)
+/upstream/
+# Working copy of GullyScoreRN (recorded from; only the unused db import is
+# stubbed — the recorder asserts the engine files stay byte-identical)
+/work/
+# Android SDK + NDK installed locally inside the lab
+/android-sdk/
+# Rust toolchain installed locally inside the lab
+/toolchain/
+# Cargo build output
+/rust/target/
+# APK output lives in rust/app/ as a tracked artifact (not ignored)

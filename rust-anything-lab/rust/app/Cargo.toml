@@ -1,0 +1,37 @@
+[package]
+name = "gullyscore_app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "GullyScore Android app in Rust — egui UI on the proved gullyscore_engine port"
+
+[dependencies]
+gullyscore_engine = { path = "../engine" }
+indexmap = { workspace = true }
+
+# eframe per target: both use the bundled fonts + the glow (OpenGL ES) renderer.
+# - desktop host builds: x11 backend (the sandbox has no display, but the crate
+#   must typecheck for host tooling)
+# - android: NativeActivity backend — pure Rust, no Java glue, loads as a
+#   cdylib via android.app.NativeActivity
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "x11",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "android-native-activity",
+] }
+# The glue crate's API must be consumed from the app crate (matching winit's
+# version — see the winit compatibility table). Only used for android_main.
+winit = { version = "0.30", default-features = false, features = [
+    "android-native-activity",
+] }
+
+[lib]
+crate-type = ["lib", "cdylib"]

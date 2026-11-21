@@ -1,0 +1,4 @@
+# Android cross-compilation: the NDK's clang wrapper links for API 24+
+[target.aarch64-linux-android]
+linker = "/home/z/my-project/rust-anything-lab/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+rustflags = ["-C", "link-arg=-Wl,--no-undefined-version"]

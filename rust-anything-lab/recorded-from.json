@@ -1,0 +1,27 @@
+{
+  "schema": "rust-anything-lab/recorded-from@1",
+  "recordedAt": "2026-11-20T20:43:01.089Z",
+  "seed": 12648430,
+  "files": {
+    "GullyScoreRN/src/engine/scoringEngine.ts": {
+      "sha256": "46c72265fd1097d9f272b45d4c7d55980a5ddb8fd46d7de06c3a29d27146f1cf",
+      "bytes": 27250,
+      "lines": 884
+    },
+    "GullyScoreRN/src/engine/playerStatsEngine.ts": {
+      "sha256": "c3f3d30e5ba8badd7abd1a5c6951173cdd29bb1dd72c20f356c46820ae7e3e44",
+      "bytes": 16637,
+      "lines": 564
+    },
+    "GullyScoreRN/src/engine/predictionEngine.ts": {
+      "sha256": "c843c8bb2ac09bd5d0a337bd4ce4053af928090a6c55093dd7e23f33933a1729",
+      "bytes": 23937,
+      "lines": 679
+    },
+    "GullyScoreRN/src/types/cricket.ts": {
+      "sha256": "cfd69881dcf50d25dac244c0ded88cd6dddccd8fb92d347c28ce43336d832519",
+      "bytes": 8926,
+      "lines": 345
+    }
+  }
+}

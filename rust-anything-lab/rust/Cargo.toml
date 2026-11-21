@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["engine", "app"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: upstream rust-anything decision M9 — the default parser can
+# be one ULP off; every case value must round-trip exactly.
+# preserve_order: JSON objects keep insertion order (JS object semantics) so
+# typed maps (teamsMap, playersMap) deserialize in the order JS callers see.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+sha2 = "0.10"
